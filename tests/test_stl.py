@@ -1,9 +1,11 @@
 """STL parser and quantitative semantics."""
 import math
+
 import numpy as np
 import pytest
+
 from safegate.stl import parse_stl
-from safegate.stl.robustness import Trace, Always, Comparison, Eventually
+from safegate.stl.robustness import Always, Trace
 
 
 def tr(**sig):
@@ -86,3 +88,45 @@ def test_sliding_window_matches_naive():
         window = vals[(time >= lo) & (time <= hi)]
         expected = window.min() if window.size else math.inf
         assert fast[i] == pytest.approx(expected)
+
+
+def test_linear_expressions_keep_physical_units():
+    t = tr(speed=[0.5, 0.64], zone_speed_limit=[0.6, 0.6])
+    # 0.6 + 0.05 - 0.64 = 0.01 m/s of headroom
+    assert parse_stl("always speed <= zone_speed_limit + 0.05").evaluate(t) == pytest.approx(0.01)
+    assert parse_stl("always speed - zone_speed_limit <= 0.05").evaluate(t) == pytest.approx(0.01)
+
+
+def test_negative_numbers_and_implication_arrow_coexist():
+    t = tr(a=[-0.2], b=[1.0])
+    assert parse_stl("a >= -0.5").evaluate(t) == pytest.approx(0.3)
+    assert parse_stl("a >= -0.5 -> b >= 0.5").evaluate(t) == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("src, fn", [("always x >= 0", np.min), ("eventually x >= 0", np.max)])
+def test_unbounded_fast_path_matches_naive(src, fn):
+    rng = np.random.default_rng(1)
+    vals = rng.normal(size=500)
+    rho = parse_stl(src).rho(tr(x=vals), {})
+    for i in (0, 1, 250, 499):
+        assert rho[i] == pytest.approx(fn(vals[i:]))
+
+
+@pytest.mark.parametrize("src", ["always[2, 0.5] x >= 0", "G[inf, inf] x >= 0", "F[1, 0] x >= 0"])
+def test_empty_or_inverted_intervals_are_rejected(src):
+    from safegate.stl.parser import STLSyntaxError
+    with pytest.raises(STLSyntaxError, match="interval"):
+        parse_stl(src)
+
+
+def test_unbounded_window_includes_last_sample_for_any_start_time():
+    rng = np.random.default_rng(3)
+    for _ in range(200):
+        t0 = float(rng.uniform(0, 1e4))
+        n = int(rng.integers(2, 400))
+        t = t0 + np.arange(n) * float(rng.choice([0.01, 0.033, 0.1]))
+        x = np.ones(n)
+        x[-1] = -5.0
+        trace = Trace(time=t, signals={"x": x})
+        assert parse_stl("always x >= 0").evaluate(trace) == -5.0
+        assert parse_stl("always (x >= 0 or x >= 0)").rho(trace, {})[0] == -5.0

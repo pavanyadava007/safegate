@@ -8,7 +8,7 @@ documentation, as a pure function of the evidence graph.
 The single design rule: nothing in this file is hand-written. If a number
 appears in the report, it was computed from evidence that is content-
 addressed and chained. Hand-editing the report is the failure mode this
-whole system exists to eliminate — it is how a document ends up claiming
+whole system exists to eliminate: it is how a document ends up claiming
 PL d for a design that achieves PL c, and it is how companies end up in
 front of a market-surveillance authority.
 
@@ -28,14 +28,16 @@ reports do not, both deliberate:
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
+import re
 import textwrap
 from dataclasses import dataclass
-from typing import Iterable
 
+from .. import __version__
 from ..core.cas import EvidenceStore
 from ..core.model import Project, Verdict
-from ..iso13849.pl import PLResult
 from ..iso3691.metrics import FieldSizingTable, StoppingBudget
+from ..iso13849.pl import PLResult
 from ..orchestrator.campaign import CampaignResult
 from ..policy.gate import GateReport
 
@@ -71,9 +73,11 @@ class TechnicalFile:
     # ---- sections -------------------------------------------------------
 
     def _cover(self) -> str:
-        anchor = self.store.anchor(self.campaign.config.campaign_id)
+        cfg = self.campaign.config
+        root = self.store.campaign_root(cfg.campaign_id)
         status = "CONFORMING" if self.gate.passed else "NON-CONFORMING"
         nb = self.meta.notified_body or "not engaged"
+        signer = self._signer() or "unsigned"
         return textwrap.dedent(
             f"""\
             # Verification and Validation Report
@@ -85,9 +89,9 @@ class TechnicalFile:
             | Document | {self.meta.document_id} rev {self.meta.revision} |
             | Machine type | {self.project.machine_type} |
             | Variant | {self.project.variant} |
-            | Issued | {_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} |
+            | Issued | {_dt.datetime.now(_dt.UTC).strftime('%Y-%m-%d %H:%M UTC')} |
             | Author | {self.meta.author} |
-            | Approver | {self.meta.approver or '— not approved —'} |
+            | Approver | {self.meta.approver or 'not approved'} |
             | Notified Body | {nb} |
             | **Gate status** | **{status}** |
 
@@ -95,17 +99,30 @@ class TechnicalFile:
 
             | | |
             |---|---|
-            | Campaign | `{anchor['campaign_id']}` |
-            | Merkle root | `{anchor['merkle_root']}` |
-            | Manifest head | `{anchor['head']}` |
-            | SUT build | `{self.campaign.config.sut_build_hash}` |
-            | Configuration | `{self.campaign.config.config_hash}` |
+            | Campaign | `{cfg.campaign_id}` |
+            | Merkle root | `{root}` |
+            | SUT build | `{cfg.sut_build_hash}` |
+            | Configuration | `{cfg.config_hash}` |
+            | Runner / backend | `{self.campaign.runner or 'unknown'}` / `{self.campaign.backend_hash[:16]}` |
+            | Project data digest | `{self.campaign.project_digest[:16]}` |
+            | Campaign seed / budgets | {cfg.seed} / boundary {cfg.boundary_budget}, sweep {cfg.sweep_budget}, falsify {cfg.falsify_budget} |
+            | Signer (Ed25519) | `{signer}` |
+            | SafeGate | {__version__} |
 
             Any party holding this document and the evidence store can
-            recompute the Merkle root and confirm that no test record has
-            been added, removed or altered since issue.
+            recompute the Merkle root and confirm that no record of this
+            campaign has been added, removed or altered since issue:
+
+                safegate verify --store <evidence store> --report <this file> \\
+                    --trusted-key <signer key from an independent source>
             """
         )
+
+    def _signer(self) -> str | None:
+        cid = self.campaign.config.campaign_id
+        for e in self.store.campaign_entries(cid):
+            return e.signer if e.signature else None
+        return None
 
     def _standards(self) -> str:
         rows = "\n".join(f"- {s}" for s in self.project.standards)
@@ -122,7 +139,7 @@ class TechnicalFile:
         ]
         for h in sorted(self.project.hazards, key=lambda x: x.ref):
             lines.append(
-                f"| {h.ref} | {h.title} | {h.zone or '—'} | {h.severity.value} "
+                f"| {h.ref} | {h.title} | {h.zone or 'n/a'} | {h.severity.value} "
                 f"| {h.frequency.value} | {h.avoidance.value} | "
                 f"**{h.required_pl.value}** |"
             )
@@ -138,11 +155,11 @@ class TechnicalFile:
         for sf in sorted(self.project.safety_functions, key=lambda x: x.ref):
             pr: PLResult | None = self.gate.pl_results.get(sf.ref)
             if pr is None:
-                lines.append(f"| {sf.ref} | — | — | — | — | not determined | — |")
+                lines.append(f"| {sf.ref} | n/a | n/a | n/a | n/a | not determined | n/a |")
                 continue
             pl = pr.achieved_pl.value if pr.achieved_pl else "INVALID"
             band = (
-                f"{pr.pfhd_band[0]:.0e} – {pr.pfhd_band[1]:.0e}" if pr.pfhd_band else "—"
+                f"{pr.pfhd_band[0]:.0e} to {pr.pfhd_band[1]:.0e}" if pr.pfhd_band else "n/a"
             )
             lines.append(
                 f"| {sf.ref} {sf.name} | {pr.category.value} | "
@@ -157,7 +174,7 @@ class TechnicalFile:
             pr = self.gate.pl_results.get(sf.ref)
             if pr is None:
                 continue
-            lines.append(f"**{sf.ref} — {sf.name}**")
+            lines.append(f"**{sf.ref}: {sf.name}**")
             lines.append("")
             lines.append("```")
             lines.append(pr.explain())
@@ -177,7 +194,7 @@ class TechnicalFile:
             f"- Guaranteed minimum deceleration: {self.budget.a_brake_mps2:.2f} m/s²\n"
             f"- Device measurement tolerance: {self.budget.z_s_m*1000:.0f} mm\n"
             f"- Human approach term credited: "
-            f"{'yes (K = 1.6 m/s)' if self.budget.human_approach else 'no'}\n"
+            f"{'yes, K = 1.6 m/s over latency plus stopping time' if self.budget.human_approach else 'no'}\n"
             f"- Design margin: {self.budget.margin_m*1000:.0f} mm\n\n"
             "```\n" + FieldSizingTable(self.budget).render() + "\n```\n"
         )
@@ -186,45 +203,63 @@ class TechnicalFile:
         lines = [
             "## 5 Verification results",
             "",
-            "| Test case | Requirement(s) | Runs | Tier | Verdict | Worst margin | 2-way cov. |",
-            "|---|---|---|---|---|---|---|",
+            f"Runner `{self.campaign.runner or 'unknown'}`. The tier column is the tier of "
+            "the evidence that was produced, followed by the tier the test case declares.",
+            "",
+            "| Test case | Requirement(s) | Runs | Errors | Tier (evidence / declared) | Verdict | Worst margin | 2-way cov. |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         total_runs = 0
         for tc in sorted(self.project.test_cases, key=lambda x: x.ref):
             o = self.campaign.outcomes.get(tc.ref)
             if o is None:
-                lines.append(f"| {tc.ref} | {', '.join(tc.requirement_refs)} | 0 | — | NOT RUN | — | — |")
+                lines.append(
+                    f"| {tc.ref} | {', '.join(tc.requirement_refs)} | 0 | 0 "
+                    f"| none / {tc.required_tier.value} | NOT RUN | n/a | n/a |"
+                )
                 continue
             total_runs += o.n_executed
-            margin = (
-                f"{o.worst_robustness:.4g}"
-                if o.worst_robustness != float("inf")
-                else "—"
-            )
+            margin = f"{o.worst_robustness:.4g}" if o.worst_robustness != float("inf") else "n/a"
+            tiers = sorted({run.tier.value for run, _ in o.runs}) or ["none"]
             lines.append(
-                f"| {tc.ref} | {', '.join(tc.requirement_refs)} | {o.n_executed} "
-                f"| {tc.required_tier.value} | **{o.verdict.value.upper()}** "
+                f"| {tc.ref} | {', '.join(tc.requirement_refs)} | {o.n_executed} | {o.n_errors} "
+                f"| {'+'.join(tiers)} / {tc.required_tier.value} | **{o.verdict.value.upper()}** "
                 f"| {margin} | {o.coverage.get('two_way', 0):.0%} |"
             )
         lines.append("")
         lines.append(f"Total runs executed: **{total_runs}**.")
         lines.append("")
+        lines.append(
+            "Worst margin is the minimum STL robustness over all runs, in the unit of the "
+            "criterion (metres, seconds or m/s). Negative means violated."
+        )
+        lines.append("")
 
-        # Counterexamples get their own subsection — they are the most
+        # Counterexamples get their own subsection: they are the most
         # important content in the document.
         fails = [
             (ref, o)
             for ref, o in self.campaign.outcomes.items()
-            if o.verdict in (Verdict.FAIL, Verdict.FLAKY)
+            if o.verdict in (Verdict.FAIL, Verdict.FLAKY, Verdict.ERROR)
         ]
         if fails:
-            lines.append("### 5.1 Counterexamples and non-reproducible results")
+            lines.append("### 5.1 Counterexamples, errors and non-reproducible results")
             lines.append("")
             for ref, o in sorted(fails):
-                lines.append(f"**{ref}** — {o.verdict.value}")
+                tc = next((t for t in self.project.test_cases if t.ref == ref), None)
+                n_fail = sum(1 for _, r in o.runs if r.verdict is Verdict.FAIL)
+                lines.append(f"**{ref}**: {o.verdict.value}")
                 lines.append("")
-                lines.append(f"- Worst robustness: `{o.worst_robustness:.6g}`")
-                lines.append(f"- Parameter assignment: `{o.worst_assignment}`")
+                if tc is not None:
+                    lines.append(f"- Criterion: `{tc.criterion_stl}`")
+                lines.append(
+                    f"- Failing runs: {n_fail} of {o.n_executed}; errored runs: {o.n_errors}"
+                )
+                if o.worst_robustness != float("inf"):
+                    lines.append(f"- Worst robustness: `{o.worst_robustness:.6g}`")
+                if o.worst_assignment:
+                    shown = {k: round(v, 4) for k, v in sorted(o.worst_assignment.items())}
+                    lines.append(f"- Parameter assignment: `{shown}`")
                 worst_run = min(
                     (r for r in o.runs if r[1].robustness is not None),
                     key=lambda r: r[1].robustness,
@@ -232,8 +267,11 @@ class TechnicalFile:
                 )
                 if worst_run and worst_run[1].artifacts.get("trace"):
                     lines.append(
-                        f"- Full-resolution trace: `{worst_run[1].artifacts['trace']}`"
+                        f"- Full-resolution trace (evidence blob): `{worst_run[1].artifacts['trace']}`"
                     )
+                first_err = next((r for _, r in o.runs if r.verdict is Verdict.ERROR), None)
+                if first_err is not None:
+                    lines.append(f"- First error: `{first_err.message[:300]}`")
                 lines.append("")
         return "\n".join(lines)
 
@@ -257,7 +295,7 @@ class TechnicalFile:
             lines += ["", "### 6.1 Waivers", ""]
             for f in waived:
                 lines.append(
-                    f"- **{f.rule} / {f.subject}** — {f.waiver_justification} "
+                    f"- **{f.rule} / {f.subject}**: {f.waiver_justification} "
                     f"(approved by {f.waiver_approver})"
                 )
         return "\n".join(lines) + "\n"
@@ -327,17 +365,56 @@ class TechnicalFile:
             fh.write(text)
         # The report itself becomes evidence, committed into the chain.
         dg = self.store.put_bytes(text.encode("utf-8"))
+        cid = self.campaign.config.campaign_id
         self.store.append(
             {
-                "campaign_id": self.campaign.config.campaign_id,
+                "campaign_id": cid,
                 "type": "technical_file",
                 "document_id": self.meta.document_id,
                 "revision": self.meta.revision,
                 "digest": dg,
+                "merkle_root": self.store.campaign_root(cid),
                 "gate_passed": self.gate.passed,
             }
         )
         return dg
 
 
-__all__ = ["DocumentMeta", "TechnicalFile"]
+def verify_report(store: EvidenceStore, path: str) -> list[str]:
+    """Check a generated report against the evidence store.
+
+    Recomputes the campaign Merkle root printed on the cover sheet, and
+    checks that the report file is byte-identical to a technical file the
+    store recorded when it was issued.
+    """
+    problems: list[str] = []
+    with open(path, "rb") as fh:
+        data = fh.read()
+    text = data.decode("utf-8")
+    m_c = re.search(r"\| Campaign \| `([^`]+)` \|", text)
+    m_r = re.search(r"\| Merkle root \| `([0-9a-f]{64})` \|", text)
+    if not (m_c and m_r):
+        return ["report has no campaign id or Merkle root on its cover sheet"]
+    cid, claimed = m_c.group(1), m_r.group(1)
+    if cid not in store.campaign_ids():
+        return [f"campaign {cid} is not in the evidence store"]
+    actual = store.campaign_root(cid)
+    if actual != claimed:
+        problems.append(
+            f"Merkle root mismatch for {cid}: report {claimed[:16]}..., store {actual[:16]}..."
+        )
+    dg = hashlib.sha256(data).hexdigest()
+    issued = [
+        e
+        for e in store.entries()
+        if e.payload.get("type") == "technical_file" and e.payload.get("campaign_id") == cid
+    ]
+    if not any(e.payload.get("digest") == dg for e in issued):
+        problems.append(
+            "report file does not match any technical file recorded for this campaign "
+            "(edited after issue, or never issued from this store)"
+        )
+    return problems
+
+
+__all__ = ["DocumentMeta", "TechnicalFile", "verify_report"]

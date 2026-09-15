@@ -1,0 +1,41 @@
+# T200 rev A safety-controller and navigation parameter set (example data).
+# This file is the "configuration" in every run's pinning: its digest is the
+# campaign config hash.
+name: T200-revA
+truck_length: 2.0
+truck_width: 1.0
+
+# Field sets were sized with the SafeGate 0.3.0 budget formula, which credited
+# the ISO 13855 approach term for the latency only (not the stopping time),
+# then rounded up.
+front_field_sets:
+  - {v_max: 0.3, length: 0.60}
+  - {v_max: 0.6, length: 0.75}
+  - {v_max: 1.0, length: 1.10}
+  - {v_max: 1.5, length: 1.70}
+  - {v_max: 2.0, length: 2.50}
+rear_field_sets:
+  - {v_max: 0.3, length: 0.60}
+  - {v_max: 0.6, length: 0.75}
+field_side_margin: 0.10
+field_selection_speed_margin: 0.0
+
+scanner_response_s: 0.08    # device certificate
+scanner_tolerance_m: 0.09
+controller_reaction_s: 0.06
+comm_latency_s: 0.03
+encoder_latency_s: 0.02
+safety_brake_decel: 1.5     # nominal; the floor caps it at mu * g
+
+field_overspeed_trip_offset: 0.05  # trip 0.05 m/s above the largest field set
+zone_trip_offset: 0.05            # trip 0.05 m/s above a zone limit
+zone_ramp_monitoring: false # supervise only inside a zone
+mute_timeout_s: null        # no timeout configured
+restart_delay_s: 1.0
+
+nav_accel: 0.5
+nav_decel: 0.8
+warning_field_enabled: true
+warning_field_length: 4.0
+warning_field_side: 1.5
+warning_speed: 0.5

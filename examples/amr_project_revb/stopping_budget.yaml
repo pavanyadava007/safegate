@@ -1,0 +1,12 @@
+# Latency and braking budget for the T200 protective field.
+# Example data: each comment names the source a real project would cite.
+t_detect_s: 0.080        # scanner response time, device certificate
+t_react_s: 0.060         # safety controller reaction, measured worst case
+t_comm_s: 0.030          # CAN worst-case latency under full bus load
+a_brake_mps2: 0.95       # guaranteed on the worst floor in the ODD: mu 0.10 -> 0.98 m/s2
+z_s_m: 0.090             # scanner measurement tolerance at min reflectivity
+human_approach: true     # credit ISO 13855 K = 1.6 m/s
+margin_m: 0.100          # explicit design margin
+clause_refs:
+  - "EN ISO 3691-4 personnel detection"
+  - "EN ISO 13855 approach speed"

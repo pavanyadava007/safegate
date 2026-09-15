@@ -71,9 +71,10 @@ architectures:
         dc: 0.90
         role: output
 
-  # Deliberately non-conforming variant, kept in the example so the gate
-  # has something to catch. A fused camera+radar net proposed as the
-  # protective device.
+  # Proposed alternative, not allocated to any safety function: a fused
+  # camera + radar network as the protective device. `safegate pl` shows why
+  # it cannot be used as proposed (CCF below 65, one channel for Category 3),
+  # and if it were allocated the gate would also raise R-ML-001.
   - ref: ARCH-PDS-ML
     category: "3"
     ccf_score: 55                    # below the Annex F floor of 65

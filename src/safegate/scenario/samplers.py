@@ -4,48 +4,44 @@ safegate.scenario.samplers
 
 Turning an abstract scenario (a parameter *space*) into concrete runs.
 
-The choice of sampler is the difference between a test suite that costs
-€40k of compute and finds nothing, and one that costs €4k and finds the
-corner. Four are provided, and the campaign uses them in sequence:
+Four samplers are provided. The campaign uses the last three, in order
+(boundary, sweep, falsification); the grid sampler is available for spaces
+small enough to enumerate:
 
-  1. GridSampler        — full factorial. Only for spaces small enough to
-                          enumerate. Gives exhaustive-coverage claims,
-                          which assessors like, for the dimensions where
-                          exhaustiveness is actually achievable.
-  2. SobolSampler       — low-discrepancy quasi-random. Covers a
-                          continuous box far more evenly than uniform
-                          random at the same budget. This is the default
-                          for the broad sweep.
-  3. BoundarySampler    — the 2^k corners plus face centres plus the
-                          nominal. Defects concentrate at the extremes of
-                          the operational design domain, and corners are
-                          cheap.
-  4. RobustnessGuided   — adaptive falsification. Uses the STL robustness
-                          value as an objective and runs a simulated-
-                          annealing / cross-entropy search for the
-                          minimum. This is the one that earns its keep:
-                          it converts "we sampled 10^4 points and all
-                          passed" into "we actively searched for a
-                          counterexample and the best the optimiser could
-                          do was a margin of 61 mm".
+  1. GridSampler       full factorial. Gives exhaustive-coverage claims
+                       for the dimensions where exhaustiveness is actually
+                       achievable.
+  2. SobolSampler      scrambled Sobol low-discrepancy sequence (SciPy),
+                       with a Latin hypercube fallback when SciPy is absent.
+                       Covers a continuous box more evenly than uniform
+                       random at the same budget. This is the broad sweep.
+  3. BoundarySampler   nominal point, box corners (capped by the budget)
+                       and face centres. Defects concentrate at the
+                       extremes of the operational design domain, and
+                       corners are cheap.
+  4. RobustnessGuided  adaptive falsification: simulated annealing with
+                       restarts on the STL robustness value. It converts
+                       "we sampled N points and all passed" into "we
+                       searched for a counterexample and the smallest
+                       margin the search found was X".
 
 The honest limitation, stated up front because a safety tool that
 oversells its coverage is dangerous: none of these prove absence of
 violations. They are falsification, not verification. The technical file
-must say so, and `TechnicalFile` does.
+says so.
 """
 
 from __future__ import annotations
 
 import math
 import random
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, Protocol, Sequence
+from typing import Protocol
 
 import numpy as np
 
 from ..core.model import ParameterRange
-
 
 # --------------------------------------------------------------------------
 # Space
@@ -161,7 +157,7 @@ class SobolSampler:
 
             m = max(1, math.ceil(math.log2(max(budget, 2))))
             pts = qmc.Sobol(d=k, scramble=True, seed=seed).random_base2(m)[:budget]
-        except Exception:
+        except ImportError:
             rng = np.random.default_rng(seed)
             # Latin hypercube fallback: better than plain uniform.
             pts = np.empty((budget, k))
@@ -213,7 +209,7 @@ class BoundarySampler:
                 a[d.name] = hi if (mask >> j) & 1 else lo
             out.append(a)
         # face centres
-        for j, d in enumerate(dims):
+        for d in dims:
             for extreme in bounds(d):
                 a = space.nominal()
                 a[d.name] = extreme
@@ -258,7 +254,7 @@ class RobustnessGuidedSampler:
 
     `objective(assignment) -> rho`. The search minimises rho; the first
     negative value is a counterexample and the search stops (early exit is
-    correct here — one counterexample is enough to fail the gate, and
+    correct here: one counterexample is enough to fail the gate, and
     compute is better spent on the next requirement).
 
     Restarts guard against the classic failure of annealing on a

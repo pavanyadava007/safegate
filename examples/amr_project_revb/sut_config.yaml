@@ -1,0 +1,38 @@
+# T200 rev B safety-controller and navigation parameter set (example data).
+name: T200-revB
+truck_length: 2.0
+truck_width: 1.0
+
+# Maximum speed reduced to 1.0 m/s for aisles shared with pedestrians.
+# Field sets: L = L_req(v_max + 0.05) + 0.15 from stopping_budget.yaml
+# (`safegate fields`), i.e. sized for the selection margin below plus 0.15 m
+# for the 0.10 m separation SR-COLL-001 requires and sampling.
+front_field_sets:
+  - {v_max: 0.3, length: 1.33}
+  - {v_max: 0.6, length: 2.04}
+  - {v_max: 1.0, length: 3.14}
+rear_field_sets:
+  - {v_max: 0.3, length: 1.33}
+field_side_margin: 0.10
+field_selection_speed_margin: 0.05  # switch to the next field 0.05 m/s early
+
+scanner_response_s: 0.08
+scanner_tolerance_m: 0.09
+controller_reaction_s: 0.06
+comm_latency_s: 0.03
+encoder_latency_s: 0.02
+safety_brake_decel: 1.5
+
+field_overspeed_trip_offset: 0.05  # trip 0.05 m/s above the largest field set (1.0 m/s)
+zone_trip_offset: -0.06           # trip below a zone limit so the reaction overshoot stays inside it
+zone_ramp_monitoring: true    # supervise the braking ramp ahead of a slower zone
+zone_ramp_decel: 0.95         # the guaranteed deceleration from the budget
+mute_timeout_s: 1.8           # withdraw muting after 1.8 s (requirement: 2.0 s)
+restart_delay_s: 1.0
+
+nav_accel: 0.5
+nav_decel: 0.8
+warning_field_enabled: true
+warning_field_length: 4.0
+warning_field_side: 1.5
+warning_speed: 0.5

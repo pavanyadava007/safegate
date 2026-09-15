@@ -9,11 +9,13 @@ The central obligation is simple to state and easy to get wrong: a
 driverless truck must detect a person in its path and come to a standstill
 *before contact*. Turning that into a number requires a budget:
 
-    L_pf  >=  v * (t_detect + t_react + t_comm)     approach during latency
+    L_pf  >=  v * t_lat                             travel during latency
               + v^2 / (2 * a_brake)                 braking distance
+              + K * (t_lat + v / a_brake)           human approach allowance
               + Z_s                                 sensor measurement tolerance
-              + C_h                                 human approach allowance
               + m_safety                            design margin
+
+    with t_lat = t_detect + t_react + t_comm
 
 Where the terms come from:
 
@@ -32,9 +34,12 @@ Where the terms come from:
   Z_s          measurement tolerance of the protective device, from the
                certificate. For safety laser scanners this is typically
                tens of millimetres and grows with reflectivity.
-  C_h          allowance for the person moving toward the truck. ISO 13855
-               uses K = 1.6 m/s for approach speed; whether it applies
-               depends on the geometry of the situation and is an explicit
+  K term       allowance for a person walking toward the truck. ISO 13855
+               writes S = K * T + C with T the overall stopping time: the
+               protective device response plus the time the machine needs
+               to stop. A person keeps walking while the truck brakes, so T
+               is t_lat + v / a_brake, not t_lat alone. K = 1.6 m/s. Whether
+               the term applies depends on the situation and is an explicit
                input here rather than a hidden constant.
   m_safety     your margin. Making it an explicit input means a reviewer
                can see it, and the gate can require it to be positive.
@@ -78,6 +83,12 @@ class StoppingBudget:
     def total_latency_s(self) -> float:
         return self.t_detect_s + self.t_react_s + self.t_comm_s
 
+    def human_approach_m(self, v_mps: float) -> float:
+        """K * T with T = latency + stopping time (ISO 13855 overall T)."""
+        if not self.human_approach:
+            return 0.0
+        return K_HUMAN_APPROACH * (self.total_latency_s + v_mps / self.a_brake_mps2)
+
     def required_field_length(self, v_mps: float) -> float:
         """Minimum protective-field length for a given speed, in metres."""
         if v_mps <= 0:
@@ -87,30 +98,27 @@ class StoppingBudget:
         t = self.total_latency_s
         d_latency = v_mps * t
         d_brake = (v_mps * v_mps) / (2.0 * self.a_brake_mps2)
-        d_human = K_HUMAN_APPROACH * t if self.human_approach else 0.0
-        return d_latency + d_brake + d_human + self.z_s_m + self.margin_m
+        return d_latency + d_brake + self.human_approach_m(v_mps) + self.z_s_m + self.margin_m
 
     def max_permitted_speed(self, field_length_m: float) -> float:
         """Invert the budget: fastest speed a given field can protect.
 
-        Solves  a*v^2 + b*v + c = 0  with
-            a = 1/(2*a_brake), b = t_total, c = Z_s + margin + K*t - L
+        Solves  qa*v^2 + qb*v + qc = 0  with
+            qa = 1/(2*a_brake)
+            qb = t_lat + K/a_brake          (K term only if credited)
+            qc = K*t_lat + Z_s + margin - L
         Used for speed-zone design: given the field you can physically
         project, what is the speed limit that must be enforced?
         """
         t = self.total_latency_s
-        c = (
-            self.z_s_m
-            + self.margin_m
-            + (K_HUMAN_APPROACH * t if self.human_approach else 0.0)
-            - field_length_m
-        )
-        if c >= 0:
+        k = K_HUMAN_APPROACH if self.human_approach else 0.0
+        qc = k * t + self.z_s_m + self.margin_m - field_length_m
+        if qc >= 0:
             return 0.0
-        a = 1.0 / (2.0 * self.a_brake_mps2)
-        b = t
-        disc = b * b - 4 * a * c
-        return max(0.0, (-b + math.sqrt(disc)) / (2 * a))
+        qa = 1.0 / (2.0 * self.a_brake_mps2)
+        qb = t + k / self.a_brake_mps2
+        disc = qb * qb - 4 * qa * qc
+        return max(0.0, (-qb + math.sqrt(disc)) / (2 * qa))
 
 
 # --------------------------------------------------------------------------
@@ -127,22 +135,14 @@ def protective_field_adequacy(
 
     Wrap in `always(...)` to assert it holds for the whole run. Evaluated
     pointwise so that dynamic field switching (speed zones) is handled
-    correctly — a truck that shrinks its field before slowing down is the
+    correctly: a truck that shrinks its field before slowing down is the
     classic latent defect this catches.
     """
 
     def fn(sig, env):
         v = np.asarray(sig[speed_signal], dtype=float)
         L = np.asarray(sig[field_signal], dtype=float)
-        t = budget.total_latency_s
-        d_h = K_HUMAN_APPROACH * t if budget.human_approach else 0.0
-        req = (
-            v * t
-            + (v * v) / (2.0 * budget.a_brake_mps2)
-            + d_h
-            + budget.z_s_m
-            + budget.margin_m
-        )
+        req = np.array([budget.required_field_length(abs(float(x))) for x in v])
         return L - req
 
     return Predicate(
@@ -207,9 +207,9 @@ def stop_within_time(
             else:
                 i += 1
         if worst is math.inf:
-            # No trigger occurred: vacuously satisfied, but flagged with a
-            # small positive value so coverage analysis can spot that this
-            # scenario never exercised the function.
+            # No trigger occurred. Returned as exactly 0.0 (on the boundary)
+            # rather than a comfortable margin, so a scenario that never
+            # exercised the function cannot report headroom it did not show.
             return np.full(t.size, 0.0)
         return np.full(t.size, float(worst))
 
@@ -286,6 +286,7 @@ class FieldSizingTable:
                 "speed_mps": v,
                 "latency_m": v * self.budget.total_latency_s,
                 "braking_m": (v * v) / (2 * self.budget.a_brake_mps2),
+                "approach_m": self.budget.human_approach_m(v),
                 "tolerance_m": self.budget.z_s_m,
                 "margin_m": self.budget.margin_m,
                 "required_field_m": self.budget.required_field_length(v),
@@ -295,22 +296,22 @@ class FieldSizingTable:
 
     def render(self) -> str:
         hdr = (
-            f"{'v [m/s]':>8} {'latency':>9} {'braking':>9} "
+            f"{'v [m/s]':>8} {'latency':>9} {'braking':>9} {'approach':>9} "
             f"{'tol':>7} {'margin':>8} {'L_req [m]':>10}"
         )
         out = [hdr, "-" * len(hdr)]
         for r in self.rows():
             out.append(
                 f"{r['speed_mps']:>8.2f} {r['latency_m']:>9.3f} "
-                f"{r['braking_m']:>9.3f} {r['tolerance_m']:>7.3f} "
+                f"{r['braking_m']:>9.3f} {r['approach_m']:>9.3f} {r['tolerance_m']:>7.3f} "
                 f"{r['margin_m']:>8.3f} {r['required_field_m']:>10.3f}"
             )
         return "\n".join(out)
 
 
 __all__ = [
-    "FieldSizingTable",
     "K_HUMAN_APPROACH",
+    "FieldSizingTable",
     "StoppingBudget",
     "attach_time_signal",
     "muting_is_bounded",

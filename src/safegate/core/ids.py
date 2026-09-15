@@ -67,13 +67,16 @@ def merkle_root(digests: list[str]) -> str:
     """
     if not digests:
         return hashlib.sha256(b"").hexdigest()
-    layer = [bytes.fromhex(d) for d in sorted(digests)]
+    # Leaves and inner nodes are hashed with different prefixes, and an odd
+    # node is promoted rather than paired with itself. Duplicating it would
+    # give [a, b, c] and [a, b, c, c] the same root (RFC 6962 does the same).
+    layer = [hashlib.sha256(b"\x00" + bytes.fromhex(d)).digest() for d in sorted(digests)]
     while len(layer) > 1:
         nxt: list[bytes] = []
-        for i in range(0, len(layer), 2):
-            left = layer[i]
-            right = layer[i + 1] if i + 1 < len(layer) else left
-            nxt.append(hashlib.sha256(b"\x01" + left + right).digest())
+        for i in range(0, len(layer) - 1, 2):
+            nxt.append(hashlib.sha256(b"\x01" + layer[i] + layer[i + 1]).digest())
+        if len(layer) % 2:
+            nxt.append(layer[-1])
         layer = nxt
     return layer[0].hex()
 

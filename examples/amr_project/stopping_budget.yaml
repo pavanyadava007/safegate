@@ -1,5 +1,5 @@
 # Latency and braking budget for the T200 protective field.
-# Every term is sourced; none is a guess.
+# Example data: each comment names the source a real project would cite.
 t_detect_s: 0.080        # scanner response time, device certificate
 t_react_s: 0.060         # safety controller reaction, measured worst case
 t_comm_s: 0.030          # CAN worst-case latency under full bus load

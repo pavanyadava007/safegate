@@ -1,0 +1,93 @@
+architectures:
+    # Rev B: Category 4 personnel detection. Same scanners; safety controller
+  # with cross-monitored channels (DC 99 %); brake contactors with mirror-
+  # contact feedback read back by the controller at every stop (DC 99 %).
+  # Category 4 with MTTFd high and DCavg high is the Figure 7 cell for PL e.
+  - ref: ARCH-PDS-CAT4
+    category: "4"
+    ccf_score: 80          # Annex F score; >= 65 required
+    systematic_measures:
+      - "IEC 61508-3 SC 3 certified safety controller firmware"
+      - "Diverse scanner mounting geometry front/rear"
+      - "Brake contactor feedback checked at every stop and at power-up"
+    uses_ml_in_safety_path: false
+    subsystems:
+      - name: safety_laser_scanner_front
+        channel: 1
+        mttfd_years: 100
+        dc: 0.99
+        role: input
+        part_number: example-scanner-A
+      - name: safety_controller_ch1
+        channel: 1
+        mttfd_years: 120
+        dc: 0.99
+        role: logic
+      - name: brake_contactor_ch1
+        channel: 1
+        b10d_cycles: 1000000
+        cycles_per_hour: 30
+        operating_hours_per_day: 16
+        operating_days_per_year: 250
+        dc: 0.99
+        role: output
+      - name: safety_laser_scanner_rear
+        channel: 2
+        mttfd_years: 100
+        dc: 0.99
+        role: input
+      - name: safety_controller_ch2
+        channel: 2
+        mttfd_years: 120
+        dc: 0.99
+        role: logic
+      - name: brake_contactor_ch2
+        channel: 2
+        b10d_cycles: 1000000
+        cycles_per_hour: 30
+        operating_hours_per_day: 16
+        operating_days_per_year: 250
+        dc: 0.99
+        role: output
+
+  # Speed supervision: single channel with self-test (Category 2).
+  - ref: ARCH-SPD-CAT2
+    category: "2"
+    ccf_score: 70
+    subsystems:
+      - name: wheel_encoder
+        channel: 1
+        mttfd_years: 60
+        dc: 0.92
+        role: input
+      - name: speed_monitor_logic
+        channel: 1
+        mttfd_years: 100
+        dc: 0.95
+        role: logic
+      - name: drive_cutoff_relay
+        channel: 1
+        b10d_cycles: 2000000
+        cycles_per_hour: 20
+        dc: 0.90
+        role: output
+
+  # Proposed alternative, not allocated to any safety function: a fused
+  # camera + radar network as the protective device. `safegate pl` shows why
+  # it cannot be used as proposed (CCF below 65, one channel for Category 3),
+  # and if it were allocated the gate would also raise R-ML-001.
+  - ref: ARCH-PDS-ML
+    category: "3"
+    ccf_score: 55                    # below the Annex F floor of 65
+    uses_ml_in_safety_path: true
+    subsystems:
+      - name: camera_radar_fusion_net
+        channel: 1
+        mttfd_years: 40
+        dc: 0.80
+        role: input
+      - name: inference_ecu
+        channel: 1
+        mttfd_years: 50
+        dc: 0.60
+        role: logic

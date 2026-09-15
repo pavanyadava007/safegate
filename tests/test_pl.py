@@ -1,5 +1,6 @@
 """ISO 13849-1 calculator tests, including the cases that must FAIL."""
 import pytest
+
 from safegate.core.model import Category, PerformanceLevel, SafetyArchitecture, Subsystem
 from safegate.iso13849.pl import DCBand, MTTFdBand, component_mttfd_years, evaluate_architecture
 

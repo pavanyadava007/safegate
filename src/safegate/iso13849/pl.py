@@ -30,7 +30,7 @@ be able to challenge:
       out with the answer. A PL with no derivation is not usable in a
       technical file.
   P2. Preconditions that fail (CCF < 65 on Cat 3, MTTFd "low" on Cat 4)
-      do not silently downgrade the PL — they make the determination
+      do not silently downgrade the PL: they make the determination
       *invalid*. Silently returning a lower PL would let a broken design
       pass a weaker requirement.
   P3. PFHd is reported as the band bound, not a point estimate, unless
@@ -47,7 +47,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Sequence
 
 from ..core.model import Category, PerformanceLevel, SafetyArchitecture, Subsystem
 
@@ -312,18 +311,19 @@ def evaluate_architecture(arch: SafetyArchitecture) -> PLResult:
         violations.append(
             f"MTTFd = {mttfd:.1f} y is below the 3-year floor of ISO 13849-1"
         )
-    if arch.category in (Category.CAT_2, Category.CAT_3, Category.CAT_4):
-        if arch.ccf_score < MIN_CCF_SCORE:
-            violations.append(
-                f"CCF score {arch.ccf_score} < {MIN_CCF_SCORE} required for "
-                f"Category {arch.category.value} (Annex F)"
-            )
-    if arch.category in (Category.CAT_3, Category.CAT_4):
-        if len(channels) < 2:
-            violations.append(
-                f"Category {arch.category.value} requires two channels; "
-                f"{len(channels)} declared"
-            )
+    if (
+        arch.category in (Category.CAT_2, Category.CAT_3, Category.CAT_4)
+        and arch.ccf_score < MIN_CCF_SCORE
+    ):
+        violations.append(
+            f"CCF score {arch.ccf_score} < {MIN_CCF_SCORE} required for "
+            f"Category {arch.category.value} (Annex F)"
+        )
+    if arch.category in (Category.CAT_3, Category.CAT_4) and len(channels) < 2:
+        violations.append(
+            f"Category {arch.category.value} requires two channels; "
+            f"{len(channels)} declared"
+        )
     if d_band not in _ADMISSIBLE_DC[arch.category]:
         violations.append(
             f"DCavg band '{d_band.value}' is not admissible for Category "
@@ -372,10 +372,10 @@ def evaluate_architecture(arch: SafetyArchitecture) -> PLResult:
 
 
 __all__ = [
+    "PFHD_BANDS",
     "ChannelResult",
     "DCBand",
     "MTTFdBand",
-    "PFHD_BANDS",
     "PLResult",
     "component_mttfd_years",
     "dc_band",

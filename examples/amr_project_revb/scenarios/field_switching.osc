@@ -1,0 +1,15 @@
+# OpenSCENARIO 2 scenario for Intel Labs scenario_execution with the SafeGate SIL
+# simulation. Scenario fields are the test-case parameters: the campaign writes a
+# parameter file per concrete run, and SafeGateSimulation.reset() builds the world
+# from them. The behaviour below runs on the simulation clock.
+import osc.helpers
+import osc.safegate
+
+scenario field_switching:
+    family: string = "field_switching"
+    truck_speed: float = 1.2
+    goal_distance: float = 20.0
+    floor_mu: float = 0.5
+    do one_of:
+        sg_run_to_horizon()
+        sg_idle()

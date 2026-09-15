@@ -1,0 +1,100 @@
+name: ci
+
+# Tests SafeGate itself and runs both example projects end to end. The
+# examples are expected to FAIL the gate (rev A on design defects, rev B on
+# the missing HIL evidence), so this job asserts the exact findings instead
+# of the exit code alone.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[sign,qmc,osc,s3,ros,dev]"
+      - run: ruff check src tests scripts
+      - run: pytest -q
+
+  object-storage:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ENDPOINT_URL: http://127.0.0.1:9000
+      AWS_ACCESS_KEY_ID: safegate
+      AWS_SECRET_ACCESS_KEY: safegate-ci-secret
+      AWS_DEFAULT_REGION: us-east-1
+      SAFEGATE_TEST_S3: s3://safegate-ci/tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[sign,qmc,s3,dev]"
+      - name: MinIO
+        run: |
+          docker run -d -p 9000:9000 -e MINIO_ROOT_USER=safegate \
+            -e MINIO_ROOT_PASSWORD=safegate-ci-secret quay.io/minio/minio server /data
+          for i in $(seq 30); do curl -sf http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
+          python -c "import boto3; boto3.client('s3').create_bucket(Bucket='safegate-ci')"
+      - run: pytest -q tests/test_storage.py
+
+  ros2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[sign,qmc,ros,dev]"
+      - run: docker build -f docker/ros2/Dockerfile -t safegate-ros:jazzy .
+      - run: SAFEGATE_TEST_ROS2=1 pytest -q tests/test_rosbag.py
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[sign,qmc]"
+      - name: Campaigns, gates, reports, verification
+        run: |
+          set -u
+          safegate keygen "$RUNNER_TEMP/key" | tee key.txt
+          PUB=$(sed -n 's/^public key: //p' key.txt)
+          for p in amr_project amr_project_revb; do
+            safegate validate examples/$p
+            safegate run examples/$p --store ev-$p --build "$GITHUB_SHA" --workers 4 \
+              --boundary 16 --sweep 48 --falsify 24 \
+              --signing-key "$RUNNER_TEMP/key/signing.key" --json campaign-$p.json || true
+            safegate gate examples/$p --store ev-$p --policy examples/$p/policy.yaml \
+              --trusted-key "$PUB" --json gate-$p.json || true
+            safegate report examples/$p --store ev-$p --policy examples/$p/policy.yaml \
+              --trusted-key "$PUB" --signing-key "$RUNNER_TEMP/key/signing.key" -o VV-$p.md || true
+            safegate verify --store ev-$p --trusted-key "$PUB" --report VV-$p.md
+          done
+      - name: Expected findings
+        run: |
+          python - <<'PY'
+          import json
+          a = json.load(open("gate-amr_project.json"))
+          b = json.load(open("gate-amr_project_revb.json"))
+          blockers = lambda g: {(f["rule"], f["subject"]) for f in g["findings"] if f["severity"] == "blocker"}
+          ra = blockers(a)
+          assert ("R-PL-001", "SF-PDS-01") in ra and ("R-TRACE-002", "SR-COLL-003") in ra, ra
+          assert {s for r, s in ra if r == "R-EXEC-001"} == {
+              "TC-CROSS-001", "TC-CROSS-002", "TC-FIELD-001", "TC-SPEED-001", "TC-MUTE-001"}, ra
+          rb = blockers(b)
+          assert {r for r, _ in rb} == {"R-EXEC-002"}, rb
+          assert not [f for f in b["findings"] if f["severity"] != "blocker"], b
+          print("rev A:", len(ra), "blockers; rev B: only R-EXEC-002 (HIL evidence) remains")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: example-reports
+          path: |
+            VV-*.md
+            gate-*.json
+            campaign-*.json

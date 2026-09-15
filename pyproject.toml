@@ -1,6 +1,6 @@
 [project]
 name = "safegate"
-version = "0.3.0"
+version = "0.4.0"
 description = "Safety verification and conformity evidence for driverless industrial trucks"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.24", "pydantic>=2.5", "pyyaml>=6.0"]
@@ -8,10 +8,27 @@ dependencies = ["numpy>=1.24", "pydantic>=2.5", "pyyaml>=6.0"]
 [project.optional-dependencies]
 sign = ["cryptography>=42"]
 qmc  = ["scipy>=1.11"]
+osc  = ["scenario-execution==1.5.0"]
+s3   = ["boto3>=1.35"]
+ros  = ["rosbags>=0.10"]
 dev  = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]
 safegate = "safegate.cli:main"
+
+# OpenSCENARIO 2 integration: `import osc.safegate` in a scenario file.
+[project.entry-points."scenario_execution.osc_libraries"]
+safegate = "safegate.sim.osc_bridge:get_osc_library"
+
+[project.entry-points."scenario_execution.actions"]
+sg_run_to_horizon = "safegate.sim.osc_bridge:RunToHorizon"
+sg_wait_for_trigger = "safegate.sim.osc_bridge:WaitForTrigger"
+sg_wait_gap = "safegate.sim.osc_bridge:WaitGap"
+sg_wait_stopped = "safegate.sim.osc_bridge:WaitStopped"
+sg_wait_seconds = "safegate.sim.osc_bridge:WaitSeconds"
+sg_pedestrian_walk = "safegate.sim.osc_bridge:PedestrianWalk"
+sg_request_muting = "safegate.sim.osc_bridge:RequestMuting"
+sg_idle = "safegate.sim.osc_bridge:Idle"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -19,3 +36,30 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"safegate.sim" = ["lib_osc/*.osc"]
+"safegate.ros" = ["*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "BLE"]
+ignore = [
+    "E501",    # long lines in tables of standards data read better unwrapped
+    "E741",    # `l` is the conventional name for the left robustness signal
+    "RUF001",  # the unit and symbol characters in docstrings are intended
+    "RUF002",
+    "RUF003",
+    "UP007",
+    "UP042",   # str-mixin Enums keep their value semantics in f-strings and YAML
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "SIM"]
+"src/safegate/*/__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

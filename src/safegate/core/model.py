@@ -29,7 +29,7 @@ DAG. So the model is a typed DAG, not a document set:
 Design rules enforced here:
 
   R1. Every node carries a stable, deterministic ID derived from its
-      semantic content — NOT a uuid4. Two engineers who author the same
+      semantic content: NOT a uuid4. Two engineers who author the same
       hazard independently get the same ID. Renaming a field does not
       orphan history.
   R2. Nodes are frozen. Mutation is modelled as a new node plus a
@@ -45,11 +45,11 @@ from __future__ import annotations
 
 import datetime as _dt
 from enum import Enum
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .ids import content_id
+from .ids import content_id, digest
 
 # --------------------------------------------------------------------------
 # Enumerations mandated by the standards
@@ -69,10 +69,10 @@ class PerformanceLevel(str, Enum):
     def rank(self) -> int:
         return "abcde".index(self.value)
 
-    def __lt__(self, other: "PerformanceLevel") -> bool:  # type: ignore[override]
+    def __lt__(self, other: PerformanceLevel) -> bool:  # type: ignore[override]
         return self.rank < other.rank
 
-    def __ge__(self, other: "PerformanceLevel") -> bool:  # type: ignore[override]
+    def __ge__(self, other: PerformanceLevel) -> bool:  # type: ignore[override]
         return self.rank >= other.rank
 
 
@@ -110,7 +110,7 @@ class Avoidance(str, Enum):
 class Verdict(str, Enum):
     PASS = "pass"
     FAIL = "fail"
-    ERROR = "error"  # infrastructure failure — NOT a safety verdict
+    ERROR = "error"  # infrastructure failure: NOT a safety verdict
     FLAKY = "flaky"  # non-deterministic under identical pinning
     SKIPPED = "skipped"
 
@@ -152,7 +152,7 @@ class Node(BaseModel):
 
     kind: str
     created_at: _dt.datetime = Field(
-        default_factory=lambda: _dt.datetime.now(_dt.timezone.utc)
+        default_factory=lambda: _dt.datetime.now(_dt.UTC)
     )
     supersedes: str | None = None
     labels: dict[str, str] = Field(default_factory=dict)
@@ -349,7 +349,7 @@ class TestCase(Node):
 
     This is never executed directly. The scenario compiler concretises it
     into a set of ConcreteRun specs. That separation is what makes
-    coverage claims meaningful — you cover a *space*, not a script.
+    coverage claims meaningful: you cover a *space*, not a script.
     """
 
     kind: Literal["test_case"] = "test_case"
@@ -388,6 +388,9 @@ class ConcreteRun(Node):
 
     kind: Literal["concrete_run"] = "concrete_run"
     test_case_ref: str
+    # Scenario template reference, so a run in the manifest is enough to
+    # re-execute it without the project checkout that produced it.
+    scenario: str = ""
     assignment: dict[str, float]
     tier: ExecutionTier
     pinning: Pinning
@@ -395,6 +398,7 @@ class ConcreteRun(Node):
     def identity_fields(self) -> dict[str, Any]:
         return {
             "test_case_ref": self.test_case_ref,
+            "scenario": self.scenario,
             "assignment": dict(sorted(self.assignment.items())),
             "tier": self.tier.value,
             "pinning": self.pinning.model_dump(),
@@ -419,7 +423,7 @@ class RunResult(Node):
     metrics: dict[str, float] = Field(default_factory=dict)
     message: str = ""
     executed_at: _dt.datetime = Field(
-        default_factory=lambda: _dt.datetime.now(_dt.timezone.utc)
+        default_factory=lambda: _dt.datetime.now(_dt.UTC)
     )
 
     def identity_fields(self) -> dict[str, Any]:
@@ -475,6 +479,22 @@ class Project(BaseModel):
     safety_functions: list[SafetyFunction] = Field(default_factory=list)
     test_cases: list[TestCase] = Field(default_factory=list)
 
+    def content_digest(self) -> str:
+        """Digest of the design data, independent of when it was loaded.
+
+        Recorded with every campaign so the evidence commits to the exact
+        hazards, requirements, architectures and test cases it verified.
+        """
+
+        def strip(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                return {k: strip(v) for k, v in obj.items() if k != "created_at"}
+            if isinstance(obj, list):
+                return [strip(v) for v in obj]
+            return obj
+
+        return digest(strip(self.model_dump(mode="json")))
+
     def by_ref(self, ref: str) -> Node | None:
         for coll in (
             self.hazards,
@@ -490,6 +510,7 @@ class Project(BaseModel):
 
 
 __all__ = [
+    "TIER_WEIGHT",
     "Avoidance",
     "Category",
     "ConcreteRun",
@@ -508,7 +529,6 @@ __all__ = [
     "SafetyRequirement",
     "Severity",
     "Subsystem",
-    "TIER_WEIGHT",
     "TestCase",
     "Verdict",
 ]

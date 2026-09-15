@@ -1,0 +1,21 @@
+# OpenSCENARIO 2 scenario for Intel Labs scenario_execution with the SafeGate SIL
+# simulation. Scenario fields are the test-case parameters: the campaign writes a
+# parameter file per concrete run, and SafeGateSimulation.reset() builds the world
+# from them. The behaviour below runs on the simulation clock.
+import osc.helpers
+import osc.safegate
+
+scenario muting_pick_station:
+    family: string = "muting_pick_station"
+    approach_speed: float = 0.3
+    pick_duration_s: float = 2.0
+    mute_start_gap: float = 0.3
+    do one_of:
+        sg_run_to_horizon()
+        serial:
+            sg_wait_gap(gap: mute_start_gap)
+            sg_request_muting(enabled: true)
+            sg_wait_stopped()
+            sg_wait_seconds(seconds: pick_duration_s)
+            sg_request_muting(enabled: false)
+            sg_idle()

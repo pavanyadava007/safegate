@@ -1,0 +1,23 @@
+# rosbag2 -> SafeGate signal mapping for the SafeGate ROS 2 plant node
+# (safegate.ros.plant), which publishes every control period as one
+# sensor_msgs/JointState on /safegate/state: name[] = signal names,
+# position[] = values, header.stamp = simulation time.
+#
+# A real truck would map its own topics instead, for example:
+#   speed: {topic: /odom, field: twist.twist.linear.x, stamp: header.stamp}
+dt: 0.01
+signals:
+  speed: {topic: /safegate/state, name: speed, stamp: header.stamp}
+  speed_commanded: {topic: /safegate/state, name: speed_commanded, stamp: header.stamp}
+  truck_x: {topic: /safegate/state, name: truck_x, stamp: header.stamp}
+  leading_edge_x: {topic: /safegate/state, name: leading_edge_x, stamp: header.stamp}
+  min_distance_to_person: {topic: /safegate/state, name: min_distance_to_person, stamp: header.stamp}
+  person_in_field: {topic: /safegate/state, name: person_in_field, stamp: header.stamp}
+  detection: {topic: /safegate/state, name: detection, stamp: header.stamp}
+  safe_stop: {topic: /safegate/state, name: safe_stop, stamp: header.stamp}
+  protective_field_length: {topic: /safegate/state, name: protective_field_length, stamp: header.stamp}
+  protective_device_muted: {topic: /safegate/state, name: protective_device_muted, stamp: header.stamp}
+  mute_requested: {topic: /safegate/state, name: mute_requested, stamp: header.stamp}
+  zone_speed_limit: {topic: /safegate/state, name: zone_speed_limit, stamp: header.stamp}
+  warning_active: {topic: /safegate/state, name: warning_active, stamp: header.stamp}
+  floor_decel_limit: {topic: /safegate/state, name: floor_decel_limit, stamp: header.stamp}

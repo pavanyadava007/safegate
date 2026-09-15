@@ -41,7 +41,7 @@ Semantics implemented (Donzé & Maler, and Fainekos & Pappas):
 Signals are piecewise-constant over a sampled time grid, which is the
 honest model for ROS topic data. Interval operators use a monotonic-wedge
 (Lemire) sliding-window min/max, giving O(n) per temporal operator rather
-than the O(n*w) of the naive implementation — this matters when a
+than the O(n*w) of the naive implementation: this matters when a
 campaign evaluates 10^5 traces of 10^4 samples in CI.
 """
 
@@ -49,8 +49,8 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -105,11 +105,21 @@ def _window_extremum(
     Samples beyond the end of the trace are treated as *absent*, and the
     window shrinks. If the window is entirely outside the trace the result
     is +inf (for min) / -inf (for max), i.e. vacuous truth for `always`
-    and vacuous falsity for `eventually` — the standard convention, and
+    and vacuous falsity for `eventually`: the standard convention, and
     the conservative one for safety: `always` over an empty window must
     not manufacture a violation.
     """
     n = time.size
+    # An unbounded window is passed as b = inf, never as the trace duration:
+    # t0 + (t_end - t0) can round below t_end and silently drop the last
+    # sample from every window.
+    if n and a == 0.0 and (math.isinf(b) or time[0] + b >= time[-1]):
+        # Every window runs to the end of the trace: a reversed running
+        # extremum, vectorised. This is the common `always` / `eventually`
+        # without an interval, and it is two orders of magnitude faster than
+        # the general loop below.
+        acc = np.minimum.accumulate if want_min else np.maximum.accumulate
+        return acc(np.asarray(values, dtype=float)[::-1])[::-1].copy()
     out = np.empty(n, dtype=float)
     dq: deque[int] = deque()
     j_start = 0
@@ -152,19 +162,19 @@ class Formula:
         raise NotImplementedError
 
     def evaluate(self, trace: Trace, env: Mapping[str, float] | None = None) -> float:
-        """Robustness at t=0 — the value the gate and the sampler consume."""
+        """Robustness at t=0: the value the gate and the sampler consume."""
         return float(self.rho(trace, env or {})[0])
 
     def signals_used(self) -> set[str]:
         return set()
 
-    def __and__(self, other: "Formula") -> "And":
+    def __and__(self, other: Formula) -> And:
         return And(self, other)
 
-    def __or__(self, other: "Formula") -> "Or":
+    def __or__(self, other: Formula) -> Or:
         return Or(self, other)
 
-    def __invert__(self) -> "Not":
+    def __invert__(self) -> Not:
         return Not(self)
 
 
@@ -178,7 +188,7 @@ class Const(Formula):
 
 @dataclass
 class Predicate(Formula):
-    """`expr(signals, env) >= 0` — robustness IS the expression value.
+    """`expr(signals, env) >= 0`: robustness IS the expression value.
 
     Encoding the predicate as a margin rather than a comparison is the
     whole trick. `dist >= d_min` becomes `dist - d_min`, whose value in
@@ -199,25 +209,44 @@ class Predicate(Formula):
         return set(self.uses)
 
 
+@dataclass(frozen=True)
+class LinearExpr:
+    """Sum of `coef * name` terms; `name is None` marks a constant."""
+
+    terms: tuple[tuple[float, str | None], ...]
+
+    def names(self) -> set[str]:
+        return {n for _, n in self.terms if n is not None}
+
+
+def _resolve_name(name: str, trace: Trace, env: Mapping[str, float]) -> np.ndarray:
+    if name in trace.signals:
+        return trace.get(name)
+    if name in env:
+        return np.full(trace.n, float(env[name]))
+    raise KeyError(f"{name!r} is neither a signal nor a parameter")
+
+
 @dataclass
 class Comparison(Formula):
-    """`lhs <op> rhs` where each side is a signal name, env key, or number."""
+    """`lhs <op> rhs`; each side is a signal/parameter name, number or LinearExpr."""
 
-    lhs: str | float
+    lhs: str | float | LinearExpr
     op: str  # ">=", ">", "<=", "<"
-    rhs: str | float
+    rhs: str | float | LinearExpr
     scale: float = 1.0
 
     def _resolve(
-        self, side: str | float, trace: Trace, env: Mapping[str, float]
+        self, side: str | float | LinearExpr, trace: Trace, env: Mapping[str, float]
     ) -> np.ndarray:
         if isinstance(side, (int, float)):
             return np.full(trace.n, float(side))
-        if side in trace.signals:
-            return trace.get(side)
-        if side in env:
-            return np.full(trace.n, float(env[side]))
-        raise KeyError(f"{side!r} is neither a signal nor a parameter")
+        if isinstance(side, LinearExpr):
+            out = np.zeros(trace.n)
+            for coef, name in side.terms:
+                out = out + (coef if name is None else coef * _resolve_name(name, trace, env))
+            return out
+        return _resolve_name(side, trace, env)
 
     def rho(self, trace: Trace, env: Mapping[str, float]) -> np.ndarray:
         l = self._resolve(self.lhs, trace, env)
@@ -229,7 +258,13 @@ class Comparison(Formula):
         raise ValueError(f"unsupported operator {self.op!r}")
 
     def signals_used(self) -> set[str]:
-        return {s for s in (self.lhs, self.rhs) if isinstance(s, str)}
+        out: set[str] = set()
+        for side in (self.lhs, self.rhs):
+            if isinstance(side, str):
+                out.add(side)
+            elif isinstance(side, LinearExpr):
+                out |= side.names()
+        return out
 
 
 @dataclass
@@ -289,8 +324,7 @@ class Always(Formula):
 
     def rho(self, trace: Trace, env: Mapping[str, float]) -> np.ndarray:
         inner = self.inner.rho(trace, env)
-        b = self.b if math.isfinite(self.b) else float(trace.time[-1] - trace.time[0])
-        return _window_extremum(trace.time, inner, self.a, b, want_min=True)
+        return _window_extremum(trace.time, inner, self.a, self.b, want_min=True)
 
     def signals_used(self) -> set[str]:
         return self.inner.signals_used()
@@ -306,8 +340,7 @@ class Eventually(Formula):
 
     def rho(self, trace: Trace, env: Mapping[str, float]) -> np.ndarray:
         inner = self.inner.rho(trace, env)
-        b = self.b if math.isfinite(self.b) else float(trace.time[-1] - trace.time[0])
-        return _window_extremum(trace.time, inner, self.a, b, want_min=False)
+        return _window_extremum(trace.time, inner, self.a, self.b, want_min=False)
 
     def signals_used(self) -> set[str]:
         return self.inner.signals_used()
@@ -327,7 +360,7 @@ class Until(Formula):
         n = t.size
         l = self.left.rho(trace, env)
         r = self.right.rho(trace, env)
-        b = self.b if math.isfinite(self.b) else float(t[-1] - t[0])
+        b = self.b  # an infinite bound is used as is; t + inf is exact
         out = np.full(n, -math.inf)
         # O(n^2) worst case; acceptable because Until is rare in safety
         # requirements and n is bounded by the trace decimation applied in
@@ -351,7 +384,7 @@ class Until(Formula):
 
 @dataclass
 class Once(Formula):
-    """Past-time O_[a,b] phi — needed for 'the estop was pressed at some
+    """Past-time O_[a,b] phi: needed for 'the estop was pressed at some
     point in the last 200 ms', which is how latency requirements are
     actually phrased."""
 
@@ -361,8 +394,7 @@ class Once(Formula):
 
     def rho(self, trace: Trace, env: Mapping[str, float]) -> np.ndarray:
         inner = self.inner.rho(trace, env)
-        b = self.b if math.isfinite(self.b) else float(trace.time[-1] - trace.time[0])
-        return _window_extremum(trace.time, inner, -b, -self.a, want_min=False)
+        return _window_extremum(trace.time, inner, -self.b, -self.a, want_min=False)
 
     def signals_used(self) -> set[str]:
         return self.inner.signals_used()
@@ -401,6 +433,7 @@ __all__ = [
     "Eventually",
     "Formula",
     "Implies",
+    "LinearExpr",
     "Not",
     "Once",
     "Or",

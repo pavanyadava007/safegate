@@ -1,0 +1,20 @@
+# OpenSCENARIO 2 scenario for Intel Labs scenario_execution with the SafeGate SIL
+# simulation. Scenario fields are the test-case parameters: the campaign writes a
+# parameter file per concrete run, and SafeGateSimulation.reset() builds the world
+# from them. The behaviour below runs on the simulation clock.
+import osc.helpers
+import osc.safegate
+
+scenario reversing_at_dock:
+    family: string = "reversing_at_dock"
+    reverse_speed: float = 0.3
+    person_gap: float = 3.0
+    pedestrian_speed: float = 1.0
+    lateral_offset: float = 0.0
+    floor_mu: float = 0.5
+    warning_field: float = -1.0
+    do one_of:
+        sg_run_to_horizon()
+        serial:
+            sg_pedestrian_walk()
+            sg_idle()

@@ -1,55 +1,71 @@
+# Abstract test cases: a parameter space (the ODD box) plus an STL criterion.
+# Parameters are scenario inputs, not design values; the design lives in
+# sut_config.yaml and stopping_budget.yaml. `warning_field: [0, 1]` sweeps the
+# non-safety slowdown off as well as on, because a safety function must not
+# rely on it.
 test_cases:
   - ref: TC-CROSS-001
-    title: Pedestrian crosses the travel path at varying speed and offset
+    title: Person steps into an open aisle in front of the truck
     requirements: [SR-COLL-001]
     scenario: scenarios/person_crossing.osc
     scenario_class: pedestrian_crossing
     tier: sil
-    criterion_stl: "always min_distance_to_person >= 0.10"
+    criterion_stl: "always separation_while_moving >= 0.10"
     parameters:
-      - {name: truck_speed,               low: 0.3,  high: 2.0, unit: m/s}
-      - {name: pedestrian_speed,          low: 0.5,  high: 2.0, unit: m/s}
-      - {name: pedestrian_lateral_offset, low: 1.0,  high: 6.0, unit: m}
-      - {name: brake_decel,               low: 0.8,  high: 2.5, unit: m/s2}
-      - {name: latency,                   low: 0.10, high: 0.40, unit: s}
-      - {name: detection_range,           low: 2.5,  high: 6.0, unit: m}
-      - {name: floor_friction,            low: 0.55, high: 1.0}
+      - {name: truck_speed,             low: 0.3,  high: 2.0, unit: m/s}
+      - {name: pedestrian_speed,        low: 0.5,  high: 1.6, unit: m/s}
+      - {name: entry_gap,               low: 1.0,  high: 8.0, unit: m}
+      - {name: pedestrian_start_offset, low: 0.5,  high: 4.0, unit: m}
+      - {name: floor_mu,                low: 0.10, high: 0.60}
+      - {name: warning_field,           values: [0.0, 1.0]}
 
   - ref: TC-CROSS-002
-    title: Pedestrian emerges from occlusion behind a rack
+    title: Person emerges from a cross aisle between racks
     requirements: [SR-COLL-001]
-    scenario: scenarios/person_occluded.osc
+    scenario: scenarios/occluded_emergence.osc
     scenario_class: occluded_emergence
     tier: sil
-    criterion_stl: "always min_distance_to_person >= 0.10"
+    criterion_stl: "always separation_while_moving >= 0.10"
     parameters:
-      - {name: truck_speed,       low: 0.3,  high: 1.6, unit: m/s}
-      - {name: occlusion_duration, low: 0.0, high: 1.2, unit: s}
-      - {name: pedestrian_speed,  low: 0.8,  high: 1.8, unit: m/s}
-      - {name: brake_decel,       low: 1.0,  high: 2.5, unit: m/s2}
-      - {name: latency,           low: 0.10, high: 0.35, unit: s}
-      - {name: detection_range,   low: 3.0,  high: 6.0, unit: m}
-      - {name: pedestrian_lateral_offset, low: 0.8, high: 3.0, unit: m}
+      - {name: truck_speed,      low: 0.3,  high: 2.0, unit: m/s}
+      - {name: pedestrian_speed, low: 0.5,  high: 1.6, unit: m/s}
+      - {name: entry_gap,        low: 1.0,  high: 8.0, unit: m}
+      - {name: rack_clearance,   low: 0.3,  high: 1.5, unit: m}
+      - {name: floor_mu,         low: 0.10, high: 0.60}
+      - {name: warning_field,    values: [0.0, 1.0]}
+
+  - ref: TC-FIELD-001
+    title: Protective field follows the speed ramp in both directions
+    requirements: [SR-COLL-002]
+    scenario: scenarios/field_switching.osc
+    scenario_class: field_switching
+    tier: sil
+    criterion_stl: "always protective_field_length >= required_field_length"
+    parameters:
+      - {name: truck_speed,   low: 0.3,  high: 2.0,  unit: m/s}
+      - {name: goal_distance, low: 3.0,  high: 30.0, unit: m}
+      - {name: floor_mu,      low: 0.10, high: 0.60}
 
   - ref: TC-SPEED-001
-    title: Zone speed limit is enforced
+    title: Entering a reduced-speed zone with navigation position error
     requirements: [SR-SPEED-001]
-    scenario: scenarios/speed_zone.osc
+    scenario: scenarios/speed_zone_entry.osc
     scenario_class: speed_zone
     tier: sil
-    criterion_stl: "always speed <= zone_speed_limit"
+    criterion_stl: "always speed <= zone_speed_limit + 0.05"
     parameters:
-      - {name: truck_speed,      low: 0.3, high: 1.8, unit: m/s}
-      - {name: zone_speed_limit, values: [0.6, 1.0, 1.5, 2.0], unit: m/s}
-      - {name: brake_decel,      low: 1.0, high: 2.5, unit: m/s2}
+      - {name: truck_speed,        low: 0.3,  high: 2.0, unit: m/s}
+      - {name: zone_speed_limit,   values: [0.3, 0.6, 1.0], unit: m/s}
+      - {name: nav_position_error, low: -0.5, high: 0.5, unit: m}
+      - {name: floor_mu,           low: 0.10, high: 0.60}
 
   - ref: TC-MUTE-001
-    title: Muting during load pick-up is time-bounded
+    title: Muting while docking at a pick station is time-bounded
     requirements: [SR-MUTE-001]
-    scenario: scenarios/muting.osc
+    scenario: scenarios/muting_pick_station.osc
     scenario_class: muting
     tier: sil
-    criterion_stl: "always protective_device_muted <= 0.5"
+    criterion_stl: "always muted_elapsed <= 2.0"
     parameters:
-      - {name: occlusion_duration, low: 0.0, high: 3.0, unit: s}
-      - {name: truck_speed,        low: 0.3, high: 1.0, unit: m/s}
+      - {name: pick_duration_s, low: 0.0,  high: 4.0, unit: s}
+      - {name: approach_speed,  low: 0.15, high: 0.3, unit: m/s}

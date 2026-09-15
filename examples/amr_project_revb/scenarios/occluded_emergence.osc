@@ -1,0 +1,22 @@
+# OpenSCENARIO 2 scenario for Intel Labs scenario_execution with the SafeGate SIL
+# simulation. Scenario fields are the test-case parameters: the campaign writes a
+# parameter file per concrete run, and SafeGateSimulation.reset() builds the world
+# from them. The behaviour below runs on the simulation clock.
+import osc.helpers
+import osc.safegate
+
+scenario occluded_emergence:
+    family: string = "occluded_emergence"
+    truck_speed: float = 1.0
+    pedestrian_speed: float = 1.4
+    entry_gap: float = 4.0
+    rack_clearance: float = 0.6
+    approach_side: float = 1.0
+    floor_mu: float = 0.5
+    warning_field: float = -1.0
+    do one_of:
+        sg_run_to_horizon()
+        serial:
+            sg_wait_for_trigger()
+            sg_pedestrian_walk()
+            sg_idle()

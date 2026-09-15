@@ -1,0 +1,18 @@
+safety_functions:
+  - ref: SF-PDS-01
+    name: Personnel detection and safe stop
+    description: >
+      Detect a person within the protective field in the direction of travel
+      and bring the truck to a standstill before contact. Includes field-set
+      switching by speed and time-bounded muting.
+    architecture: ARCH-PDS-CAT4
+    requirements: [SR-COLL-001, SR-COLL-002, SR-COLL-003, SR-MUTE-001]
+    reaction: safe_stop
+    demand_rate_per_hour: 12
+
+  - ref: SF-SPD-01
+    name: Zone speed supervision
+    description: Enforce the speed limit of the occupied zone.
+    architecture: ARCH-SPD-CAT2
+    requirements: [SR-SPEED-001]
+    reaction: safe_stop

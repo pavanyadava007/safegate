@@ -1,0 +1,95 @@
+name: safety-gate
+
+# Template for a firmware repository that keeps its safety data in safety/
+# (hazards.yaml, requirements.yaml, ..., sut_config.yaml, policy.yaml).
+# Copy to .github/workflows/ in that repository.
+#
+# The gate runs on every change to firmware or safety data. Merging is blocked
+# on a blocker finding: the conformity argument is a build artefact, not a
+# quarterly document exercise.
+#
+# Secrets: SAFEGATE_SIGNING_KEY (contents of signing.key from `safegate keygen`).
+# The matching public key is pinned in safety/policy.yaml under trusted_signers,
+# and also committed as hex in safety/trusted_signers.txt for `safegate verify`.
+
+on:
+  pull_request:
+    paths: ["src/**", "safety/**", "firmware/**"]
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - run: pip install "safegate[sign,qmc] @ git+https://example.invalid/safegate.git"
+
+      # Evidence persists across runs so the chain is continuous and margins
+      # are comparable commit to commit. The gate and report read exactly one
+      # campaign (the one this job creates), never a merge of old ones.
+      - uses: actions/cache@v4
+        with:
+          path: .evidence
+          key: evidence-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: evidence-${{ github.ref_name }}-
+
+      - name: Write signing key
+        run: |
+          umask 077
+          printf '%s' "${{ secrets.SAFEGATE_SIGNING_KEY }}" > "$RUNNER_TEMP/signing.key"
+
+      - name: Validate safety data
+        run: safegate validate safety/
+
+      - name: Determine Performance Levels
+        run: safegate pl safety/
+
+      - name: Run verification campaign
+        env:
+          SAFEGATE_SIGNING_KEY: ${{ runner.temp }}/signing.key
+        run: |
+          safegate run safety/ \
+            --store .evidence \
+            --runner sil \
+            --build "$(git rev-parse HEAD)" \
+            --campaign "ci-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --boundary 24 --sweep 256 --falsify 128 --workers 4 \
+            --json campaign.json || true
+
+      - name: Evaluate release policy
+        run: |
+          safegate gate safety/ --store .evidence --policy safety/policy.yaml \
+            --campaign "ci-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --expected-build "$(git rev-parse HEAD)" --json gate.json
+
+      - name: Generate technical file section
+        if: always()
+        env:
+          SAFEGATE_SIGNING_KEY: ${{ runner.temp }}/signing.key
+        run: |
+          safegate report safety/ --store .evidence --policy safety/policy.yaml \
+            --campaign "ci-${{ github.run_id }}-${{ github.run_attempt }}" \
+            -o V-and-V.md --doc-id VV-T200 --revision "${GITHUB_SHA::7}" || true
+          safegate anchor --store .evidence -o anchor.json
+
+      - name: Verify evidence chain
+        if: always()
+        run: |
+          safegate verify --store .evidence --trusted-key safety/trusted_signers.txt \
+            --report V-and-V.md --anchor anchor.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformity-evidence
+          path: |
+            V-and-V.md
+            campaign.json
+            gate.json
+            anchor.json

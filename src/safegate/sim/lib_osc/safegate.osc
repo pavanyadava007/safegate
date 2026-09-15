@@ -1,0 +1,39 @@
+# SafeGate SIL actions for Intel Labs scenario_execution (Apache-2.0).
+#
+# Run a scenario against the SafeGate SIL world with
+#   scenario_execution --simulation safegate.sim.osc_bridge:SafeGateSimulation \
+#       --scenario-parameter-file params.yaml scenario.osc -o out/
+# The world layout comes from the scenario parameters (see reset() in
+# osc_bridge.py); these actions sequence the behaviour on the simulation clock.
+
+action sg_run_to_horizon:
+    # Succeeds once the scenario horizon computed by the world has elapsed.
+    pad: float = 0.0
+
+action sg_wait_for_trigger:
+    # Waits until the truck's leading edge is within the family's trigger gap.
+    pad: float = 0.0
+
+action sg_wait_gap:
+    # Waits until the truck's leading edge is within `gap` metres of the scenario line.
+    gap: float
+
+action sg_wait_stopped:
+    # Waits until the truck is at standstill.
+    pad: float = 0.0
+
+action sg_wait_seconds:
+    # Waits `seconds` of simulation time, measured from the first tick of this action.
+    seconds: float
+
+action sg_pedestrian_walk:
+    # Sends pedestrian p1 to the walk target the scenario family defines.
+    pad: float = 0.0
+
+action sg_request_muting:
+    # Asserts or withdraws the navigation muting request.
+    enabled: bool
+
+action sg_idle:
+    # Keeps running; ends a behaviour branch without ending the scenario.
+    pad: float = 0.0

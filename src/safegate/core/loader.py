@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from ..stl.parser import STLSyntaxError, parse_stl
 from .model import (
     Avoidance,
     Category,
@@ -150,11 +151,11 @@ def load_project(root: str | Path) -> Project:
             )
         )
 
-    _validate(proj)
+    _validate(proj, root)
     return proj
 
 
-def _validate(p: Project) -> None:
+def _validate(p: Project, root: Path | None = None) -> None:
     """Referential integrity. Fail at load, not at audit."""
     errs: list[str] = []
     haz = {h.ref for h in p.hazards}
@@ -177,6 +178,25 @@ def _validate(p: Project) -> None:
                 errs.append(f"test case {tc.ref}: unknown requirement {rr!r}")
         if not tc.criterion_stl:
             errs.append(f"test case {tc.ref}: missing criterion_stl")
+        else:
+            try:
+                parse_stl(tc.criterion_stl)
+            except STLSyntaxError as exc:
+                errs.append(f"test case {tc.ref}: criterion does not parse: {exc}")
+        if (
+            root is not None
+            and tc.scenario_template
+            and not (root / tc.scenario_template).exists()
+        ):
+            errs.append(
+                f"test case {tc.ref}: scenario template {tc.scenario_template!r} not found"
+            )
+    for r in p.requirements:
+        if r.criterion_stl:
+            try:
+                parse_stl(r.criterion_stl)
+            except STLSyntaxError as exc:
+                errs.append(f"requirement {r.ref}: criterion does not parse: {exc}")
 
     for coll, label in (
         (p.hazards, "hazard"),
@@ -187,7 +207,7 @@ def _validate(p: Project) -> None:
     ):
         seen: set[str] = set()
         for n in coll:
-            ref = getattr(n, "ref")
+            ref = n.ref
             if ref in seen:
                 errs.append(f"duplicate {label} ref {ref!r}")
             seen.add(ref)

@@ -1,0 +1,9 @@
+name: amr-tug-t200-revb
+machine_type: driverless industrial truck (tow tractor)
+variant: T200-warehouse rev B
+standards:
+  - EN ISO 3691-4:2023
+  - EN ISO 13849-1:2023
+  - EN ISO 12100:2010
+  - EN ISO 13855:2010
+  - Regulation (EU) 2023/1230

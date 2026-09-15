@@ -22,10 +22,16 @@ Grammar (lowest precedence first)::
                | ("once" | "O") interval? unary
                | atom ( ("until" | "U") interval? unary )?
     atom      := "(" formula ")" | comparison
-    comparison := term op term
-    term      := NUMBER | IDENT | IDENT "(" args ")"
+    comparison := expr op expr | IDENT
+    expr      := operand ( ("+" | "-") operand )*
+    operand   := "-"? ( NUMBER | IDENT )
     interval  := "[" NUMBER "," (NUMBER | "inf") "]"
     op        := ">=" | "<=" | ">" | "<"
+
+Expressions are linear (sums and differences of signals, parameters and
+constants), which keeps robustness in physical units: `speed <= limit +
+0.05` has robustness `limit + 0.05 - speed` in m/s. A bare identifier means
+`x > 0.5`, for boolean signals.
 
 Units: bare numbers are SI base units (metres, seconds, m/s). Intervals
 are in seconds. A trailing unit suffix (``0.2s``, ``150ms``, ``50mm``) is
@@ -48,6 +54,7 @@ from .robustness import (
     Eventually,
     Formula,
     Implies,
+    LinearExpr,
     Not,
     Once,
     Or,
@@ -73,7 +80,7 @@ _TOKEN_RE = re.compile(
     \s*(?:
         (?P<num>\d+(?:\.\d*)?(?:[eE][+-]?\d+)?(?P<unit>ms|us|mm|cm|km|deg|rad|hz|s|m)?\b)
       | (?P<inf>\binf\b)
-      | (?P<op>>=|<=|->|>|<)
+      | (?P<op>>=|<=|->|>|<|\+|-)
       | (?P<punc>[\[\],()])
       | (?P<ident>[A-Za-z_][A-Za-z_0-9./]*)
     )
@@ -200,11 +207,19 @@ class Parser:
 
     def interval(self) -> tuple[float, float]:
         if self.cur.kind == "punc" and self.cur.text == "[":
-            self.eat("punc", "[")
+            start = self.eat("punc", "[")
             a = self.eat("num").value
             self.eat("punc", ",")
             b = self.eat("num").value
             self.eat("punc", "]")
+            if not (0.0 <= a <= b) or math.isinf(a):
+                # An empty or negative window makes `always` vacuously true,
+                # which would pass every run.
+                raise STLSyntaxError(
+                    f"interval [{a}, {b}] must satisfy 0 <= a <= b with finite a",
+                    self.src,
+                    start.pos,
+                )
             return float(a), float(b)
         return 0.0, math.inf
 
@@ -240,27 +255,44 @@ class Parser:
             return f
         return self.comparison()
 
-    def term(self) -> str | float:
+    def operand(self) -> tuple[float, str | None]:
+        sign = -1.0 if self.accept("op", "-") else 1.0
         t = self.cur
         if t.kind == "num":
             self.i += 1
-            return float(t.value)
+            return sign * float(t.value), None
         if t.kind == "ident":
             self.i += 1
-            return t.text
+            return sign, t.text
         raise STLSyntaxError("expected a signal name or number", self.src, t.pos)
 
+    def expr(self) -> str | float | LinearExpr:
+        terms = [self.operand()]
+        while self.cur.kind == "op" and self.cur.text in ("+", "-"):
+            sign = 1.0 if self.eat("op").text == "+" else -1.0
+            coef, name = self.operand()
+            terms.append((sign * coef, name))
+        if len(terms) == 1:
+            coef, name = terms[0]
+            if name is None:
+                return coef
+            if coef == 1.0:
+                return name
+        return LinearExpr(tuple(terms))
+
     def comparison(self) -> Formula:
-        lhs = self.term()
+        lhs = self.expr()
         t = self.cur
         if t.kind != "op" or t.text not in (">=", "<=", ">", "<"):
-            # A bare identifier is allowed and treated as `x > 0`, which
+            # A bare identifier is allowed and treated as `x > 0.5`, which
             # covers boolean signals like `estop_engaged`.
             if isinstance(lhs, str):
                 return Comparison(lhs, ">", 0.5)
-            return Const(float(lhs))
+            if isinstance(lhs, float):
+                return Const(lhs)
+            raise STLSyntaxError("expected a comparison operator", self.src, t.pos)
         self.i += 1
-        rhs = self.term()
+        rhs = self.expr()
         return Comparison(lhs, t.text, rhs)
 
 

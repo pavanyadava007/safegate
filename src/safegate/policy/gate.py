@@ -23,14 +23,19 @@ The rules shipped by default encode the non-negotiables:
   R-TRACE-001 every hazard is covered by at least one requirement
   R-TRACE-002 every requirement is verified by at least one test case
   R-TRACE-003 every requirement has a machine-checkable criterion
+  R-TRACE-004 every requirement that covers a hazard is realised by a
+              safety function, so its PL can be derived at all
   R-EXEC-001  no test case may be FAIL, FLAKY or ERROR
   R-EXEC-002  test cases verifying a PL d or PL e function must have
-              evidence at HIL tier or above — simulation alone does not
+              evidence at HIL tier or above - simulation alone does not
               discharge a verification obligation for a high-PL function
   R-COV-001   two-way parameter coverage above a threshold
   R-MARGIN-001 worst-case robustness margin above a floor (catches the
               design that passes with 2 mm to spare)
-  R-EVID-001  the manifest chain is intact and signed
+  R-EVID-001  the manifest chain is intact, signed by a trusted key pinned
+              in the policy, and consistent with any published anchor
+  R-EVID-002  the evidence was produced against the design data being
+              gated (project digest) and, if given, the expected build
   R-ML-001    ML in the safety path triggers the Machinery Regulation
               Notified-Body route; self-declaration is blocked
 
@@ -43,17 +48,16 @@ feature this tool will ever have.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable
 
 import yaml
 
 from ..core.cas import EvidenceStore
 from ..core.model import (
+    TIER_WEIGHT,
     ExecutionTier,
     Finding,
     PerformanceLevel,
     Project,
-    TIER_WEIGHT,
     Verdict,
 )
 from ..iso13849.pl import PLResult, evaluate_architecture
@@ -67,12 +71,13 @@ class PolicyConfig:
     require_signed_evidence: bool = True
     high_pl_min_tier: ExecutionTier = ExecutionTier.HIL
     high_pl_threshold: PerformanceLevel = PerformanceLevel.d
+    trusted_signers: list[str] = field(default_factory=list)
     waivers: dict[str, dict[str, str]] = field(default_factory=dict)
     disabled_rules: set[str] = field(default_factory=set)
 
     @staticmethod
-    def from_yaml(path: str) -> "PolicyConfig":
-        with open(path, "r", encoding="utf-8") as fh:
+    def from_yaml(path: str) -> PolicyConfig:
+        with open(path, encoding="utf-8") as fh:
             d = yaml.safe_load(fh) or {}
         return PolicyConfig(
             min_two_way_coverage=float(d.get("min_two_way_coverage", 0.60)),
@@ -80,6 +85,7 @@ class PolicyConfig:
             require_signed_evidence=bool(d.get("require_signed_evidence", True)),
             high_pl_min_tier=ExecutionTier(d.get("high_pl_min_tier", "hil")),
             high_pl_threshold=PerformanceLevel(d.get("high_pl_threshold", "d")),
+            trusted_signers=[str(k).strip().lower() for k in d.get("trusted_signers", []) or []],
             waivers=d.get("waivers", {}) or {},
             disabled_rules=set(d.get("disabled_rules", []) or []),
         )
@@ -100,10 +106,10 @@ class GateReport:
 
     def render(self) -> str:
         if not self.findings:
-            return "GATE PASS — no findings."
+            return "GATE PASS - no findings."
         order = {"blocker": 0, "major": 1, "minor": 2, "info": 3}
         rows = sorted(self.findings, key=lambda f: (order[f.severity], f.rule))
-        out = [f"GATE {'PASS' if self.passed else 'FAIL'} — {len(rows)} finding(s)", ""]
+        out = [f"GATE {'PASS' if self.passed else 'FAIL'} - {len(rows)} finding(s)", ""]
         for f in rows:
             tag = f.severity.upper()
             mark = "" if f.disposition == "open" else f" [{f.disposition}]"
@@ -124,11 +130,15 @@ class Gate:
         campaign: CampaignResult | None,
         store: EvidenceStore | None,
         config: PolicyConfig,
+        anchors: list[dict] | None = None,
+        expected_build: str | None = None,
     ) -> None:
         self.project = project
         self.campaign = campaign
         self.store = store
         self.config = config
+        self.anchors = anchors or []
+        self.expected_build = expected_build
         self._findings: list[Finding] = []
 
     # ---- finding creation with waiver application -----------------------
@@ -162,8 +172,7 @@ class Gate:
 
     def _rule_performance_levels(self, report: GateReport) -> None:
         arch_by_ref = {a.ref: a for a in self.project.architectures}
-        req_by_ref = {r.ref: r for r in self.project.requirements}
-        haz_by_ref = {h.ref: h for h in self.project.hazards}
+        required_pls = self._required_pls()
 
         for sf in self.project.safety_functions:
             arch = arch_by_ref.get(sf.architecture_ref)
@@ -178,6 +187,22 @@ class Gate:
             plr_result = evaluate_architecture(arch)
             report.pl_results[sf.ref] = plr_result
 
+            # Checked before validity: an ML architecture is usually also an
+            # invalid one, and the regulatory route is a separate blocker
+            # that must not be hidden behind the first.
+            if arch.uses_ml_in_safety_path:
+                self._raise(
+                    "R-ML-001",
+                    "blocker",
+                    sf.ref,
+                    "architecture declares machine learning in the safety path. "
+                    "Regulation (EU) 2023/1230 Annex I requires third-party "
+                    "conformity assessment by a Notified Body for safety "
+                    "components with self-evolving ML behaviour; "
+                    "self-declaration is not available and ISO 13849-1 offers "
+                    "no quantification route.",
+                )
+
             if not plr_result.valid:
                 self._raise(
                     "R-PL-002",
@@ -187,19 +212,7 @@ class Gate:
                 )
                 continue
 
-            # Required PL = max PLr over all hazards this function mitigates
-            required: PerformanceLevel | None = None
-            for rref in sf.requirement_refs:
-                req = req_by_ref.get(rref)
-                if req is None:
-                    continue
-                for href in req.hazard_refs:
-                    h = haz_by_ref.get(href)
-                    if h is None:
-                        continue
-                    plr = h.required_pl
-                    if required is None or plr.rank > required.rank:
-                        required = plr
+            required = required_pls.get(sf.ref)
             if required is None:
                 self._raise(
                     "R-TRACE-001",
@@ -218,21 +231,8 @@ class Gate:
                     f"(Cat {arch.category.value}, MTTFd {plr_result.mttfd_band.value}, "
                     f"DCavg {plr_result.dc_band.value}, CCF {plr_result.ccf_score})",
                 )
-            if arch.uses_ml_in_safety_path:
-                self._raise(
-                    "R-ML-001",
-                    "blocker",
-                    sf.ref,
-                    "architecture declares machine learning in the safety path. "
-                    "Regulation (EU) 2023/1230 Annex I requires third-party "
-                    "conformity assessment by a Notified Body for safety "
-                    "components with self-evolving ML behaviour; "
-                    "self-declaration is not available and ISO 13849-1 offers "
-                    "no quantification route.",
-                )
 
     def _rule_traceability(self) -> None:
-        req_by_ref = {r.ref: r for r in self.project.requirements}
         covered_hazards: set[str] = set()
         for r in self.project.requirements:
             covered_hazards.update(r.hazard_refs)
@@ -243,6 +243,18 @@ class Gate:
                     "blocker",
                     h.ref,
                     f"hazard has no safety requirement (PLr {h.required_pl.value})",
+                )
+        allocated: set[str] = set()
+        for sf in self.project.safety_functions:
+            allocated.update(sf.requirement_refs)
+        for r in self.project.requirements:
+            if r.hazard_refs and r.ref not in allocated:
+                self._raise(
+                    "R-TRACE-004",
+                    "blocker",
+                    r.ref,
+                    "requirement covers a hazard but no safety function lists it, so no "
+                    "Performance Level can be derived for it",
                 )
         verified: set[str] = set()
         for tc in self.project.test_cases:
@@ -272,11 +284,31 @@ class Gate:
                 "R-EXEC-001", "blocker", self.project.name, "no campaign results supplied"
             )
             return
-        req_by_ref = {r.ref: r for r in self.project.requirements}
+        if not self.campaign.complete:
+            self._raise(
+                "R-EXEC-001",
+                "blocker",
+                self.campaign.config.campaign_id,
+                "campaign has no campaign_end entry: it was interrupted and its results "
+                "are partial",
+            )
+        for ref in self.campaign.incomplete_test_cases:
+            self._raise(
+                "R-EXEC-001",
+                "blocker",
+                ref,
+                "test case has runs but no summary: it did not finish executing",
+            )
         sf_by_req: dict[str, list[str]] = {}
         for sf in self.project.safety_functions:
             for rref in sf.requirement_refs:
                 sf_by_req.setdefault(rref, []).append(sf.ref)
+        req_by_ref = {r.ref: r for r in self.project.requirements}
+        haz_by_ref = {h.ref: h for h in self.project.hazards}
+        required_pls = self._required_pls()
+        achieved_pls = {
+            ref: pr.achieved_pl for ref, pr in report.pl_results.items() if pr.achieved_pl
+        }
 
         for tc in self.project.test_cases:
             o = self.campaign.outcomes.get(tc.ref)
@@ -301,8 +333,13 @@ class Gate:
                     "does not reproduce has verified nothing",
                 )
             elif o.verdict is Verdict.ERROR:
+                first = next((r.message for _, r in o.runs if r.verdict is Verdict.ERROR), "")
                 self._raise(
-                    "R-EXEC-001", "blocker", tc.ref, "all runs errored; no evidence produced"
+                    "R-EXEC-001",
+                    "blocker",
+                    tc.ref,
+                    f"{o.n_errors} of {o.n_executed} runs errored, so part of the "
+                    f"declared space has no evidence. First error: {first[:200]}",
                 )
 
             # Coverage
@@ -330,28 +367,57 @@ class Gate:
                     f"below the required floor {self.config.min_robustness_margin:.6g}",
                 )
 
-            # Tier adequacy for high-PL functions
-            required_pl: PerformanceLevel | None = None
-            for rref in tc.requirement_refs:
-                for sfref in sf_by_req.get(rref, []):
-                    pr = report.pl_results.get(sfref)
-                    if pr and pr.achieved_pl:
-                        if required_pl is None or pr.achieved_pl.rank > required_pl.rank:
-                            required_pl = pr.achieved_pl
-            if required_pl and required_pl.rank >= self.config.high_pl_threshold.rank:
-                best_tier = max(
-                    (TIER_WEIGHT[run.tier] for run, _ in o.runs), default=-1
+            # Tier adequacy. Evidence tier is what the runner that produced
+            # the run declares, never what the test case asks for.
+            best_tier = max((TIER_WEIGHT[run.tier] for run, _ in o.runs), default=-1)
+            best_name = next(
+                (run.tier.value for run, _ in o.runs if TIER_WEIGHT[run.tier] == best_tier),
+                "none",
+            )
+            if best_tier < TIER_WEIGHT[tc.required_tier]:
+                self._raise(
+                    "R-EXEC-003",
+                    "blocker",
+                    tc.ref,
+                    f"declares tier {tc.required_tier.value} but the best evidence "
+                    f"is {best_name}",
                 )
-                if best_tier < TIER_WEIGHT[self.config.high_pl_min_tier]:
-                    self._raise(
-                        "R-EXEC-002",
-                        "blocker",
-                        tc.ref,
-                        f"verifies a PL {required_pl.value} function but the highest "
-                        f"evidence tier is below "
-                        f"{self.config.high_pl_min_tier.value}. Simulation alone does "
-                        "not discharge a verification obligation at this PL.",
-                    )
+
+            # High-PL functions need physical evidence. The PL that sets the
+            # obligation is the higher of required and achieved: using only
+            # the achieved PL would let an invalid or under-designed function
+            # escape the rule.
+            # Hazards reached directly through the requirement count too, so a
+            # requirement no safety function lists cannot escape the rule.
+            obligation: PerformanceLevel | None = None
+            for rref in tc.requirement_refs:
+                candidates = [
+                    pl
+                    for sfref in sf_by_req.get(rref, [])
+                    for pl in (required_pls.get(sfref), achieved_pls.get(sfref))
+                ]
+                req = req_by_ref.get(rref)
+                if req is not None:
+                    candidates += [
+                        haz_by_ref[h].required_pl for h in req.hazard_refs if h in haz_by_ref
+                    ]
+                for pl in candidates:
+                    if pl is not None and (obligation is None or pl.rank > obligation.rank):
+                        obligation = pl
+            if (
+                obligation is not None
+                and obligation.rank >= self.config.high_pl_threshold.rank
+                and best_tier < TIER_WEIGHT[self.config.high_pl_min_tier]
+            ):
+                self._raise(
+                    "R-EXEC-002",
+                    "blocker",
+                    tc.ref,
+                    f"verifies a PL {obligation.value} obligation but the best evidence "
+                    f"tier is {best_name}, below {self.config.high_pl_min_tier.value}. "
+                    "Simulation alone does not discharge a verification obligation "
+                    "at this PL.",
+                )
 
     def _rule_evidence_integrity(self) -> None:
         if self.store is None:
@@ -359,18 +425,92 @@ class Gate:
                 "R-EVID-001", "blocker", "evidence-store", "no evidence store supplied"
             )
             return
-        pub = self.store.signer_id
-        problems = self.store.verify_chain(pub)
+        trusted = self.config.trusted_signers
+        problems = self.store.verify_chain(trusted_keys=trusted)
         for p in problems:
             self._raise("R-EVID-001", "blocker", "evidence-store", p)
-        if self.config.require_signed_evidence and not pub:
-            self._raise(
-                "R-EVID-001",
-                "major",
-                "evidence-store",
-                "evidence chain is unsigned; integrity is detectable but not "
-                "attributable",
-            )
+        for anchor in self.anchors:
+            for p in self.store.verify_anchor(anchor):
+                self._raise("R-EVID-001", "blocker", "evidence-store", f"anchor: {p}")
+        signers, unsigned = self._campaign_signers()
+        if self.config.require_signed_evidence:
+            if unsigned:
+                self._raise(
+                    "R-EVID-001",
+                    "blocker",
+                    "evidence-store",
+                    f"{unsigned} campaign entries are unsigned, and the policy requires "
+                    "signed evidence",
+                )
+            if len(signers) > 1:
+                self._raise(
+                    "R-EVID-001",
+                    "blocker",
+                    "evidence-store",
+                    f"campaign entries are signed by {len(signers)} different keys",
+                )
+            if signers and not trusted:
+                self._raise(
+                    "R-EVID-001",
+                    "major",
+                    "evidence-store",
+                    "signatures are self-attested: no trusted_signers are pinned in "
+                    "the policy, so a writer who regenerates the chain with a new key "
+                    "would also pass",
+                )
+
+        if self.campaign is not None:
+            cur = self.project.content_digest()
+            if self.campaign.project_digest and self.campaign.project_digest != cur:
+                self._raise(
+                    "R-EVID-002",
+                    "blocker",
+                    self.campaign.config.campaign_id,
+                    "evidence was produced against different design data (project "
+                    f"digest {self.campaign.project_digest[:16]}..., current "
+                    f"{cur[:16]}...); re-run the campaign",
+                )
+            if (
+                self.expected_build
+                and self.campaign.config.sut_build_hash != self.expected_build
+            ):
+                self._raise(
+                    "R-EVID-002",
+                    "blocker",
+                    self.campaign.config.campaign_id,
+                    f"evidence is for build {self.campaign.config.sut_build_hash[:16]}, "
+                    f"release candidate is {self.expected_build[:16]}",
+                )
+
+    def _campaign_signers(self) -> tuple[set[str], int]:
+        """Distinct signers and the number of unsigned entries in the campaign."""
+        if self.store is None:
+            return set(), 0
+        if self.campaign is not None:
+            entries = self.store.campaign_entries(self.campaign.config.campaign_id)
+        else:
+            entries = list(self.store.entries())
+        signers = {e.signer or "" for e in entries if e.signature}
+        unsigned = sum(1 for e in entries if not e.signature)
+        return signers, unsigned
+
+    def _required_pls(self) -> dict[str, PerformanceLevel]:
+        req_by_ref = {r.ref: r for r in self.project.requirements}
+        haz_by_ref = {h.ref: h for h in self.project.hazards}
+        out: dict[str, PerformanceLevel] = {}
+        for sf in self.project.safety_functions:
+            for rref in sf.requirement_refs:
+                req = req_by_ref.get(rref)
+                if req is None:
+                    continue
+                for href in req.hazard_refs:
+                    h = haz_by_ref.get(href)
+                    if h is None:
+                        continue
+                    cur = out.get(sf.ref)
+                    if cur is None or h.required_pl.rank > cur.rank:
+                        out[sf.ref] = h.required_pl
+        return out
 
     # ---- entry point ----------------------------------------------------
 
