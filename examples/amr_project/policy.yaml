@@ -1,0 +1,11 @@
+min_two_way_coverage: 0.50
+min_robustness_margin: 0.02       # 20 mm of headroom, not 0 mm
+require_signed_evidence: true
+high_pl_threshold: d
+high_pl_min_tier: hil
+disabled_rules: []
+waivers:
+  # Example of the only acceptable waiver shape: scoped, justified, named.
+  # "R-EXEC-002:TC-MUTE-001":
+  #   justification: "HIL rig unavailable until W41; SIL evidence accepted for release candidate only"
+  #   approver: "H. Bauer, Head of Functional Safety"

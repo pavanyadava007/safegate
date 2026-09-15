@@ -1,0 +1,21 @@
+[project]
+name = "safegate"
+version = "0.3.0"
+description = "Safety verification and conformity evidence for driverless industrial trucks"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.24", "pydantic>=2.5", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+sign = ["cryptography>=42"]
+qmc  = ["scipy>=1.11"]
+dev  = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+safegate = "safegate.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

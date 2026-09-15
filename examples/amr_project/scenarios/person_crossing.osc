@@ -1,0 +1,23 @@
+# OpenSCENARIO 2 template, consumed by the scenario_execution backend.
+# $-prefixed names are bound by the scenario compiler from the parameter
+# space in test_cases.yaml; the same file drives SIL and HIL.
+import osc.ros
+import osc.helpers
+
+scenario person_crossing:
+    truck: differential_drive_robot
+    pedestrian: osc_actor
+
+    do parallel:
+        serial:
+            truck.init_nav2(pose_3d(position_3d(x: 0.0m, y: 0.0m)))
+            truck.nav_to_pose(pose_3d(position_3d(x: 20.0m, y: 0.0m)))
+            emit end
+        serial:
+            wait elapsed($cross_trigger_time)
+            pedestrian.move_to(
+                pose_3d(position_3d(x: $crossing_x, y: -$pedestrian_lateral_offset)),
+                speed: $pedestrian_speed)
+        time_out: serial:
+            wait elapsed(60s)
+            emit fail

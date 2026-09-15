@@ -1,0 +1,91 @@
+architectures:
+  # Dual-channel personnel detection: two certified safety laser scanners,
+  # a dual-channel safety controller, and two independent brake paths.
+  - ref: ARCH-PDS-CAT3
+    category: "3"
+    ccf_score: 75          # Annex F score; >= 65 required for Cat 3
+    systematic_measures:
+      - "IEC 61508-3 SC 3 certified safety controller firmware"
+      - "Diverse scanner mounting geometry front/side"
+      - "Periodic proof test of the brake path at each power-up"
+    uses_ml_in_safety_path: false
+    subsystems:
+      - name: safety_laser_scanner_front
+        channel: 1
+        mttfd_years: 100
+        dc: 0.99
+        role: input
+        part_number: SICK-microScan3-Core-I
+        cert_reference: "TUV-cert-placeholder-01"
+      - name: safety_controller_ch1
+        channel: 1
+        mttfd_years: 120
+        dc: 0.95
+        role: logic
+      - name: brake_contactor_ch1
+        channel: 1
+        b10d_cycles: 1000000
+        cycles_per_hour: 30
+        operating_hours_per_day: 16
+        operating_days_per_year: 250
+        dc: 0.90
+        role: output
+      - name: safety_laser_scanner_side
+        channel: 2
+        mttfd_years: 100
+        dc: 0.99
+        role: input
+      - name: safety_controller_ch2
+        channel: 2
+        mttfd_years: 120
+        dc: 0.95
+        role: logic
+      - name: brake_contactor_ch2
+        channel: 2
+        b10d_cycles: 1000000
+        cycles_per_hour: 30
+        operating_hours_per_day: 16
+        operating_days_per_year: 250
+        dc: 0.90
+        role: output
+
+  # Speed supervision: single channel with self-test (Category 2).
+  - ref: ARCH-SPD-CAT2
+    category: "2"
+    ccf_score: 70
+    subsystems:
+      - name: wheel_encoder
+        channel: 1
+        mttfd_years: 60
+        dc: 0.92
+        role: input
+      - name: speed_monitor_logic
+        channel: 1
+        mttfd_years: 100
+        dc: 0.95
+        role: logic
+      - name: drive_cutoff_relay
+        channel: 1
+        b10d_cycles: 2000000
+        cycles_per_hour: 20
+        dc: 0.90
+        role: output
+
+  # Deliberately non-conforming variant, kept in the example so the gate
+  # has something to catch. A fused camera+radar net proposed as the
+  # protective device.
+  - ref: ARCH-PDS-ML
+    category: "3"
+    ccf_score: 55                    # below the Annex F floor of 65
+    uses_ml_in_safety_path: true
+    subsystems:
+      - name: camera_radar_fusion_net
+        channel: 1
+        mttfd_years: 40
+        dc: 0.80
+        role: input
+      - name: inference_ecu
+        channel: 1
+        mttfd_years: 50
+        dc: 0.60
+        role: logic

@@ -1,0 +1,34 @@
+requirements:
+  - ref: SR-COLL-001
+    statement: >
+      The truck shall detect a person in its travel path and shall be
+      brought to a standstill before contact, maintaining a minimum
+      separation of 0.10 m at all times during normal operation.
+    hazards: [HAZ-COLL-001, HAZ-COLL-002]
+    criterion_stl: "always min_distance_to_person >= 0.10"
+    parameters: {d_min: 0.10}
+    clauses: ["EN ISO 3691-4 personnel detection", "EN ISO 13855 approach"]
+    allocated_to: [SF-PDS-01]
+
+  - ref: SR-COLL-002
+    statement: >
+      The protective field length shall at all times be sufficient for the
+      instantaneous speed, including detection latency, reaction latency,
+      braking distance, device measurement tolerance and design margin.
+    hazards: [HAZ-COLL-001]
+    criterion_stl: "always protective_field_length >= 2.6"
+    allocated_to: [SF-PDS-01]
+
+  - ref: SR-SPEED-001
+    statement: The truck shall not exceed the speed limit of the zone it occupies.
+    hazards: [HAZ-SPEED-001]
+    criterion_stl: "always speed <= zone_speed_limit"
+    allocated_to: [SF-SPD-01]
+
+  - ref: SR-MUTE-001
+    statement: >
+      Any muting of the personnel-detection protective device shall not
+      persist longer than 2.0 s.
+    hazards: [HAZ-MUTE-001]
+    criterion_stl: "always protective_device_muted <= 0.5"
+    allocated_to: [SF-PDS-01]

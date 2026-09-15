@@ -1,0 +1,55 @@
+test_cases:
+  - ref: TC-CROSS-001
+    title: Pedestrian crosses the travel path at varying speed and offset
+    requirements: [SR-COLL-001]
+    scenario: scenarios/person_crossing.osc
+    scenario_class: pedestrian_crossing
+    tier: sil
+    criterion_stl: "always min_distance_to_person >= 0.10"
+    parameters:
+      - {name: truck_speed,               low: 0.3,  high: 2.0, unit: m/s}
+      - {name: pedestrian_speed,          low: 0.5,  high: 2.0, unit: m/s}
+      - {name: pedestrian_lateral_offset, low: 1.0,  high: 6.0, unit: m}
+      - {name: brake_decel,               low: 0.8,  high: 2.5, unit: m/s2}
+      - {name: latency,                   low: 0.10, high: 0.40, unit: s}
+      - {name: detection_range,           low: 2.5,  high: 6.0, unit: m}
+      - {name: floor_friction,            low: 0.55, high: 1.0}
+
+  - ref: TC-CROSS-002
+    title: Pedestrian emerges from occlusion behind a rack
+    requirements: [SR-COLL-001]
+    scenario: scenarios/person_occluded.osc
+    scenario_class: occluded_emergence
+    tier: sil
+    criterion_stl: "always min_distance_to_person >= 0.10"
+    parameters:
+      - {name: truck_speed,       low: 0.3,  high: 1.6, unit: m/s}
+      - {name: occlusion_duration, low: 0.0, high: 1.2, unit: s}
+      - {name: pedestrian_speed,  low: 0.8,  high: 1.8, unit: m/s}
+      - {name: brake_decel,       low: 1.0,  high: 2.5, unit: m/s2}
+      - {name: latency,           low: 0.10, high: 0.35, unit: s}
+      - {name: detection_range,   low: 3.0,  high: 6.0, unit: m}
+      - {name: pedestrian_lateral_offset, low: 0.8, high: 3.0, unit: m}
+
+  - ref: TC-SPEED-001
+    title: Zone speed limit is enforced
+    requirements: [SR-SPEED-001]
+    scenario: scenarios/speed_zone.osc
+    scenario_class: speed_zone
+    tier: sil
+    criterion_stl: "always speed <= zone_speed_limit"
+    parameters:
+      - {name: truck_speed,      low: 0.3, high: 1.8, unit: m/s}
+      - {name: zone_speed_limit, values: [0.6, 1.0, 1.5, 2.0], unit: m/s}
+      - {name: brake_decel,      low: 1.0, high: 2.5, unit: m/s2}
+
+  - ref: TC-MUTE-001
+    title: Muting during load pick-up is time-bounded
+    requirements: [SR-MUTE-001]
+    scenario: scenarios/muting.osc
+    scenario_class: muting
+    tier: sil
+    criterion_stl: "always protective_device_muted <= 0.5"
+    parameters:
+      - {name: occlusion_duration, low: 0.0, high: 3.0, unit: s}
+      - {name: truck_speed,        low: 0.3, high: 1.0, unit: m/s}

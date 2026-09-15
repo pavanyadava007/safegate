@@ -1,0 +1,44 @@
+hazards:
+  - ref: HAZ-COLL-001
+    title: Collision with a person in the travel path
+    description: >
+      The truck travels along an aisle shared with pedestrians. A person
+      steps into the travel path from behind a rack. Contact at operating
+      speed can cause crushing injuries to the feet and lower legs, and
+      knock-down injuries.
+    zone: main_aisle
+    severity: S2        # serious, normally irreversible
+    frequency: F2       # continuous exposure - shared aisle
+    avoidance: P2       # scarcely avoidable, person may not see the truck
+    # -> PLr = d
+
+  - ref: HAZ-COLL-002
+    title: Collision during reversing without direct line of sight
+    description: Rear-travel manoeuvre in a dock area with limited sensor coverage.
+    zone: dock
+    severity: S2
+    frequency: F1
+    avoidance: P2
+    # -> PLr = d
+
+  - ref: HAZ-SPEED-001
+    title: Overspeed in a reduced-speed zone
+    description: >
+      The truck fails to enforce the zone speed limit at a blind junction,
+      so the protective field no longer covers the stopping distance.
+    zone: junction
+    severity: S2
+    frequency: F1
+    avoidance: P1
+    # -> PLr = c
+
+  - ref: HAZ-MUTE-001
+    title: Protective device muted beyond its justification
+    description: >
+      The protective field is suppressed for load pick-up and the
+      suppression is not withdrawn when the manoeuvre ends.
+    zone: pick_station
+    severity: S2
+    frequency: F1
+    avoidance: P2
+    # -> PLr = d
