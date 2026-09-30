@@ -32,12 +32,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -e ".[sign,qmc,s3,dev]"
-      - name: MinIO
+      - run: pip install -e ".[sign,qmc,s3,dev]" "moto[server]"
+      # S3-compatible endpoint for CI. The MinIO image on quay.io no longer allows anonymous pulls
+      # (unauthorized on GitHub runners since 2026-09); locally the same tests run against MinIO.
+      - name: S3 endpoint (moto)
         run: |
-          docker run -d -p 9000:9000 -e MINIO_ROOT_USER=safegate \
-            -e MINIO_ROOT_PASSWORD=safegate-ci-secret quay.io/minio/minio server /data
-          for i in $(seq 30); do curl -sf http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
+          moto_server -H 127.0.0.1 -p 9000 > moto.log 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:9000/ >/dev/null && break; sleep 1; done
           python -c "import boto3; boto3.client('s3').create_bucket(Bucket='safegate-ci')"
       - run: pytest -q tests/test_storage.py
 
