@@ -184,4 +184,4 @@ cross-process determinism, and the HIL contract.
 ## Licence notes
 
 Uses Intel Labs `scenario_execution` (arXiv:2409.07080, Apache-2.0) as an optional
-dependency. No licence has been chosen for SafeGate itself yet.
+dependency. SafeGate itself is MIT licensed (see LICENSE).
